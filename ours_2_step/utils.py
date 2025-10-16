@@ -1,145 +1,13 @@
 import os
-from typing import Optional, cast
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 import torch
-from numpy.typing import ArrayLike, NDArray
-
-def coords_to_phase(coords):
-    x, y = coords[:, 0], coords[:, 1]
-    phase = torch.atan2(y, x)
-    phase = torch.where(phase < 0, phase + 2*np.pi, phase)
-    return phase
-
-def phase_to_coords(phase):
-    x = torch.cos(phase)
-    y = torch.sin(phase)
-    return torch.stack([x, y], dim=1)
 
 def time_to_phase(time_hours, period_hours=24.0):
     return 2 * np.pi * time_hours / period_hours
-
-def plot_eigengenes_2d_with_phase_gradient(
-        test_file, 
-        preprocessing_info, 
-        predicted_phases, 
-        celltypes_data, save_dir='./results'):
-    print("\n=== 绘制Eigengenes 2D关系图（相位渐变色）===")
-    
-    df = pd.read_csv(test_file, low_memory=False)
-    
-    celltype_row = df[df['Gene_Symbol'] == 'celltype_D']
-    sample_columns = [col for col in df.columns if col != 'Gene_Symbol']
-    
-    gene_df = df[~df['Gene_Symbol'].isin(['celltype_D', 'time_C'])].copy()
-    test_expression_data = gene_df[sample_columns].values.T
-    
-    scaler = preprocessing_info['scaler']
-    pca_model = preprocessing_info['pca_model']
-    
-    test_expression_scaled = scaler.transform(test_expression_data)
-    eigengenes = pca_model.transform(test_expression_scaled)
-    
-    print(f"Eigengenes维度: {eigengenes.shape}")
-    print(f"预测相位范围: {predicted_phases.min():.3f} - {predicted_phases.max():.3f} 弧度")
-    
-    phase_normalized = (predicted_phases - predicted_phases.min()) / (predicted_phases.max() - predicted_phases.min())
-    
-    os.makedirs(save_dir, exist_ok=True)
-    
-    if celltypes_data is not None:
-        unique_celltypes = np.unique(celltypes_data)
-        unique_celltypes = [ct for ct in unique_celltypes if ct != 'PADDING']
-        print(f"细胞类型: {unique_celltypes}")
-    else:
-        unique_celltypes = ['All_Samples']
-        celltypes_data = np.array(['All_Samples'] * len(predicted_phases))
-    
-    n_components = min(5, eigengenes.shape[1])
-    eigengene_pairs = []
-    for i in range(n_components):
-        for j in range(i+1, n_components):
-            eigengene_pairs.append((i, j))
-    
-    print(f"将绘制 {len(eigengene_pairs)} 个eigengene对")
-    
-    for celltype in unique_celltypes:
-        print(f"绘制细胞类型: {celltype}")
-        
-        celltype_mask = celltypes_data == celltype
-        celltype_eigengenes = eigengenes[celltype_mask]
-        celltype_phases = predicted_phases[celltype_mask]
-        celltype_phase_norm = phase_normalized[celltype_mask]
-        
-        if len(celltype_eigengenes) < 3:
-            print(f"  细胞类型 {celltype} 样本太少，跳过")
-            continue
-        
-        n_cols = min(3, len(eigengene_pairs))
-        n_rows = (len(eigengene_pairs) + n_cols - 1) // n_cols
-        
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols, 5*n_rows))
-        if len(eigengene_pairs) == 1:
-            axes = [axes]
-        elif n_rows == 1:
-            axes = axes.flatten() if len(eigengene_pairs) > 1 else [axes]
-        else:
-            axes = axes.flatten()
-        
-        for idx, (pc1, pc2) in enumerate(eigengene_pairs):
-            if idx >= len(axes):
-                break
-                
-            ax = axes[idx]
-            
-            x_data = celltype_eigengenes[:, pc1]
-            y_data = celltype_eigengenes[:, pc2]
-            
-            scatter = ax.scatter(x_data, y_data, 
-                               c=celltype_phase_norm, 
-                               cmap='hsv',
-                               alpha=0.8, 
-                               s=50, 
-                               edgecolors='black', 
-                               linewidth=0.5)
-            
-            explained_var_1 = preprocessing_info['explained_variance'][pc1] * 100
-            explained_var_2 = preprocessing_info['explained_variance'][pc2] * 100
-            
-            ax.set_xlabel(f'Eigengene {pc1+1} ({explained_var_1:.1f}% variance)', fontsize=12)
-            ax.set_ylabel(f'Eigengene {pc2+1} ({explained_var_2:.1f}% variance)', fontsize=12)
-            ax.set_title(f'Eigengene {pc1+1} vs {pc2+1}\n{celltype} (n={len(x_data)})', fontsize=14)
-            ax.grid(True, alpha=0.3)
-            
-            cbar = plt.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04)
-            cbar.set_label('Predicted Phase\n(gradient)', rotation=270, labelpad=15)
-            
-            phase_hours_min = celltype_phases.min() * 24 / (2 * np.pi)
-            phase_hours_max = celltype_phases.max() * 24 / (2 * np.pi)
-            cbar.set_ticks([0, 0.5, 1])
-            cbar.set_ticklabels([f'{phase_hours_min:.1f}h', 
-                               f'{(phase_hours_min + phase_hours_max)/2:.1f}h',
-                               f'{phase_hours_max:.1f}h'])
-        
-        for idx in range(len(eigengene_pairs), len(axes)):
-            axes[idx].set_visible(False)
-        
-        plt.suptitle(f'Eigengenes 2D Patterns - {celltype}\n(Colors represent predicted phase)', 
-                     fontsize=18, fontweight='bold')
-        plt.tight_layout()
-        
-        filename = f'eigengenes_2d_phase_gradient_{celltype}.png'
-        filepath = os.path.join(save_dir, filename)
-        plt.savefig(filepath, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print(f"  已保存: {filepath}")
-    
-    print("Eigengenes 2D相位渐变图绘制完成！")
-
 
 def create_prediction_plots(results_df, save_dir):
     
@@ -208,306 +76,6 @@ def create_prediction_plots(results_df, save_dir):
     
     print(f"预测分析图表保存到: {os.path.join(save_dir, 'prediction_analysis.png')}")
 
-
-def get_original_gene_expressions(test_file, custom_genes, preprocessing_info, phase_hours_data, celltypes_data):
-    try:
-        print(f"从原始文件重新读取自定义基因: {custom_genes}")
-        
-        df = pd.read_csv(test_file, low_memory=False)
-        
-        gene_df = df[~df['Gene_Symbol'].isin(['celltype_D', 'time_C'])].copy()
-        test_gene_names = gene_df['Gene_Symbol'].values
-        
-        sample_columns = [col for col in df.columns if col != 'Gene_Symbol']
-        test_expression_data = gene_df[sample_columns].values.T
-        
-        scaler = preprocessing_info['scaler']
-        test_expression_scaled = scaler.transform(test_expression_data)
-        
-        found_genes = []
-        gene_expressions_list = []
-        
-        for gene in custom_genes:
-            if gene in test_gene_names:
-                gene_idx = np.where(test_gene_names == gene)[0][0]
-                gene_expression = test_expression_scaled[:, gene_idx]
-                gene_expressions_list.append(gene_expression)
-                found_genes.append(gene)
-                print(f"  ✓ 找到基因: {gene}")
-            else:
-                print(f"  ✗ 基因 {gene} 不在测试数据中")
-        
-        if len(found_genes) == 0:
-            print("错误: 没有找到任何指定的基因")
-            return None, None
-        
-        gene_expressions = np.column_stack(gene_expressions_list)
-        
-        print(f"成功获取 {len(found_genes)} 个基因的表达数据")
-        print(f"表达数据维度: {gene_expressions.shape}")
-        
-        return gene_expressions, np.array(found_genes)
-        
-    except Exception as e:
-        print(f"从原始文件读取基因表达数据时出错: {e}")
-        return None, None
-
-def plot_celltype_gene_expression_raw(expressions, phase_hours, gene_names, celltype, save_dir):
-    n_genes = len(gene_names)
-    
-    print(f"为细胞类型 {celltype} 绘制基因表达图（原始数据）")
-    print(f"样本数量: {len(expressions)}")
-    print(f"基因数量: {n_genes}")
-    print(f"表达数据维度: {expressions.shape}")
-    
-    n_cols = min(5, n_genes)
-    n_rows = (n_genes + n_cols - 1) // n_cols
-    
-    _, axes = plt.subplots(n_rows, n_cols, figsize=(4*n_cols, 4*n_rows))
-    if n_genes == 1:
-        axes = [axes]
-    elif n_rows == 1:
-        axes = axes.flatten() if n_genes > 1 else [axes]
-    else:
-        axes = axes.flatten()
-    
-    for i, gene_name in enumerate(gene_names):
-        ax = axes[i]
-        
-        gene_expression = expressions[:, i]
-        
-        if len(phase_hours) == 0:
-            ax.text(0.5, 0.5, 'No Data', transform=ax.transAxes, ha='center', va='center')
-            ax.set_title(f'{gene_name}', fontsize=10)
-            continue
-        
-        ax.scatter(phase_hours, gene_expression, alpha=0.6, s=20, color='blue', label='Raw Data')
-        
-        if len(phase_hours) > 5:
-            try:
-                def sine_func(x, amplitude, phase_shift, offset):
-                    return amplitude * np.sin(2 * np.pi * x / 24 + phase_shift) + offset
-                
-                from scipy.optimize import curve_fit
-                popt, _ = curve_fit(sine_func, phase_hours, gene_expression, max_nfev=2000)
-                
-                x_fit = np.linspace(0, 24, 100)
-                y_fit = sine_func(x_fit, *popt)
-                ax.plot(x_fit, y_fit, '--', color='green', alpha=0.7, linewidth=2)
-                
-                amplitude, phase_shift, _ = popt
-                peak_time = (-phase_shift * 24 / (2 * np.pi)) % 24
-                
-                y_pred = sine_func(phase_hours, *popt)
-                ss_res = np.sum((gene_expression - y_pred) ** 2)
-                ss_tot = np.sum((gene_expression - np.mean(gene_expression)) ** 2)
-                r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-                
-                ax.text(0.02, 0.98, 
-                       f'Peak: {peak_time:.1f}h\nAmp: {amplitude:.3f}\nR²: {r_squared:.3f}', 
-                       transform=ax.transAxes, verticalalignment='top', fontsize=8,
-                       bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-                
-            except Exception as e:
-                print(f"拟合失败 {gene_name}: {e}")
-        
-        ax.set_title(f'{gene_name}', fontsize=10)
-        ax.set_xlabel('Predicted Phase (Hours)')
-        ax.set_ylabel('Expression Level')
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim(0, 24)
-        ax.set_xticks([0, 6, 12, 18, 24])
-        
-        if i == 0:
-            ax.legend(fontsize=8)
-    
-    for i in range(n_genes, len(axes)):
-        axes[i].set_visible(False)
-    
-    plt.suptitle(f'Gene Expression vs Predicted Phase - {celltype} (Raw Data)', fontsize=14)
-    plt.tight_layout()
-    
-    filename = f'gene_expression_phase_{celltype}.png'
-    filepath = os.path.join(save_dir, filename)
-    plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"基因表达相位图（原始数据）已保存: {filepath}")
-
-def plot_celltype_comparison_raw(
-    expressions, 
-    phase_hours, 
-    celltypes, 
-    gene_names, 
-    valid_celltypes, 
-    save_dir,
-    n_genes_to_compare=4
-):
-    print("绘制细胞类型对比图（原始数据）...")
-    print(f"有效细胞类型: {valid_celltypes}")
-    print(f"选择的基因: {gene_names[:n_genes_to_compare]}")
-    
-    n_genes_to_compare = min(n_genes_to_compare, len(gene_names))
-    top_genes = gene_names[:n_genes_to_compare]
-    
-    n_cols = min(2, n_genes_to_compare)
-    n_rows = (n_genes_to_compare + n_cols - 1) // n_cols
-    
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(8*n_cols, 6*n_rows))
-    if n_genes_to_compare == 1:
-        axes = [axes]
-    elif n_rows == 1:
-        axes = axes.flatten() if n_genes_to_compare > 1 else [axes]
-    else:
-        axes = axes.flatten()
-    
-    cmap = plt.get_cmap('tab10')
-    colors = cmap(np.linspace(0, 1, len(valid_celltypes)))
-    
-    for i, gene_name in enumerate(top_genes):
-        if i >= len(axes):
-            break
-            
-        ax = axes[i]
-        
-        for celltype_idx, celltype in enumerate(valid_celltypes):
-            celltype_mask = celltypes == celltype
-            celltype_expressions = expressions[celltype_mask, i]
-            celltype_phases = phase_hours[celltype_mask]
-            
-            if len(celltype_expressions) < 3:
-                continue
-            
-            ax.scatter(celltype_phases, celltype_expressions, 
-                      color=colors[celltype_idx], alpha=0.6, s=15, 
-                      label=f'{celltype} (n={len(celltype_expressions)})')
-            
-            if len(celltype_expressions) > 5:
-                try:
-                    sorted_indices = np.argsort(celltype_phases)
-                    sorted_phases = celltype_phases[sorted_indices]
-                    sorted_expressions = celltype_expressions[sorted_indices]
-                    
-                    window_size = max(3, len(sorted_phases) // 8)
-                    if len(sorted_phases) >= window_size:
-                        from scipy.ndimage import uniform_filter1d
-                        smooth_expression = uniform_filter1d(sorted_expressions.astype(float), size=window_size)
-                        ax.plot(sorted_phases, smooth_expression, 
-                               color=colors[celltype_idx], linewidth=2, alpha=0.8)
-                        
-                except Exception as e:
-                    print(f"平滑处理失败 {gene_name} - {celltype}: {e}")
-        
-        ax.set_title(f'{gene_name}', fontsize=14, fontweight='bold')
-        ax.set_xlabel('Predicted Phase (Hours)', fontsize=12)
-        ax.set_ylabel('Expression Level', fontsize=12)
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim(0, 24)
-        ax.set_xticks([0, 6, 12, 18, 24])
-        
-        handles, labels = ax.get_legend_handles_labels()
-        if len(handles) <= 8:
-            ax.legend(fontsize=10, loc='best')
-        else:
-            ax.legend(handles[:8], labels[:8], fontsize=10, loc='best', 
-                     title=f"Showing first 8/{len(handles)} cell types")
-    
-    for i in range(n_genes_to_compare, len(axes)):
-        axes[i].set_visible(False)
-    
-    plt.suptitle('Gene Expression Comparison Across Cell Types (Raw Data)', 
-                 fontsize=16, fontweight='bold')
-    plt.tight_layout()
-    
-    filename = 'gene_expression_celltype_comparison.png'
-    filepath = os.path.join(save_dir, filename)
-    plt.savefig(filepath, dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"细胞类型对比图（原始数据）已保存: {filepath}")
-
-def plot_gene_expression_with_custom_data(
-    model, 
-    test_loader, 
-    preprocessing_info, 
-    custom_gene_expressions, 
-    custom_gene_names, 
-    device='cuda', 
-    save_dir='./results'
-):
-    print("\n=== 使用自定义基因数据绘制基因表达相位图（原始数据）===")
-    model.eval()
-    
-    celltype_to_idx = preprocessing_info.get('celltype_to_idx', {})
-    
-    all_phase_hours = []
-    all_celltypes = []
-    
-    with torch.no_grad():
-        for batch in test_loader:
-            expressions = batch['expression'].to(device)
-            celltypes = batch.get('celltype', None)
-            
-            # 准备细胞类型索引
-            celltype_indices = None
-            if celltypes is not None and celltype_to_idx:
-                batch_celltype_indices = []
-                for ct in celltypes:
-                    batch_celltype_indices.append(celltype_to_idx.get(ct, 0))
-                celltype_indices = torch.tensor(batch_celltype_indices, device=device)
-            
-            phase_coords, phase_angles, _ = model(expressions, celltype_indices)
-            phase_hours = phase_angles.cpu().numpy() * preprocessing_info.get('period_hours', 24.0) / (2 * np.pi)
-            
-            all_phase_hours.append(phase_hours)
-            
-            if celltypes is not None:
-                all_celltypes.extend(celltypes)
-    
-    phase_hours_data = np.concatenate(all_phase_hours)
-    
-    if all_celltypes:
-        celltypes_data = np.array(all_celltypes)
-        unique_celltypes = np.unique(celltypes_data)
-        print(f"发现细胞类型: {unique_celltypes}")
-    else:
-        celltypes_data = None
-        unique_celltypes = ['All_Samples']
-
-    
-    os.makedirs(save_dir, exist_ok=True)
-    
-    if celltypes_data is not None:
-        for celltype in unique_celltypes:
-            if celltype == 'PADDING':
-                continue
-                
-            celltype_mask = celltypes_data == celltype
-            celltype_expressions = custom_gene_expressions[celltype_mask]
-            celltype_phases = phase_hours_data[celltype_mask]
-            
-            if len(celltype_expressions) < 5:
-                continue
-            
-            plot_celltype_gene_expression_raw(
-                celltype_expressions, celltype_phases, custom_gene_names,
-                celltype, save_dir
-            )
-    else:
-        plot_celltype_gene_expression_raw(
-            custom_gene_expressions, phase_hours_data, custom_gene_names,
-            'All_Samples', save_dir
-        )
-    
-    if celltypes_data is not None and len(unique_celltypes) > 1:
-        valid_celltypes = [ct for ct in unique_celltypes if ct != 'PADDING']
-        if len(valid_celltypes) > 1:
-            plot_celltype_comparison_raw(
-                custom_gene_expressions, phase_hours_data, celltypes_data, custom_gene_names,
-                valid_celltypes, save_dir
-            )
-    
-    print("自定义基因表达相位图绘制完成！")
 
 def predict_and_save_phases(model, test_loader, preprocessing_info, device='cuda', save_dir='./results'):
     print("\n=== 预测测试集相位 ===")
@@ -650,35 +218,35 @@ def load_metadata_for_phase_comparison(metadata_csv: str) -> pd.DataFrame:
         m['study'] = m['study'].astype(str)
         m['sample'] = m['sample'].astype(str)
         m['study_sample'] = m['study'] + '_' + m['sample']
-        m['time_mod24'] = to_float_series(m['time'])
+        m['time_mod24'] = to_float_series(m['time']) % 24
         return m[['study_sample', 'time_mod24']]
 
     # Case 2: study_sample + time_mod24
     if {'study_sample', 'time_mod24'}.issubset(cols):
         m = meta.copy()
         m['study_sample'] = m['study_sample'].astype(str)
-        m['time_mod24'] = to_float_series(m['time_mod24'])
+        m['time_mod24'] = to_float_series(m['time_mod24']) % 24
         return m[['study_sample', 'time_mod24']]
 
     # Case 3: study_sample + time
     if {'study_sample', 'time'}.issubset(cols):
         m = meta.copy()
         m['study_sample'] = m['study_sample'].astype(str)
-        m['time_mod24'] = to_float_series(m['time'])
+        m['time_mod24'] = to_float_series(m['time']) % 24
         return m[['study_sample', 'time_mod24']]
 
     # Case 4: Sample + Time_Hours
     if {'Sample', 'Time_Hours'}.issubset(cols):
         m = meta.copy()
         m['study_sample'] = m['Sample'].astype(str)
-        m['time_mod24'] = to_float_series(m['Time_Hours'])
+        m['time_mod24'] = to_float_series(m['Time_Hours']) % 24
         return m[['study_sample', 'time_mod24']]
 
     # Case 5: Sample + time
     if {'Sample', 'time'}.issubset(cols):
         m = meta.copy()
         m['study_sample'] = m['Sample'].astype(str)
-        m['time_mod24'] = to_float_series(m['time'])
+        m['time_mod24'] = to_float_series(m['time']) % 24
         return m[['study_sample', 'time_mod24']]
 
     raise ValueError("Unsupported metadata format. Expected one of: {'study','sample','time'}; {'study_sample','time_mod24'}; {'study_sample','time'}; {'Sample','Time_Hours'}; {'Sample','time'}")
@@ -822,14 +390,15 @@ def plot_phase_vs_metadata_comparison(pred_csv: str, celltype: str, meta: pd.Dat
 
         aligned, r, r2, spearman_R, best_shift, flipped = best_align_phase_for_comparison(phase_hours, metadata_hours, step=0.1)
 
-        plt.figure(figsize=(8, 6))
+        plt.figure(figsize=(7.5, 5.5))
         plt.scatter(aligned, metadata_hours, s=28, alpha=0.85, edgecolors='white', linewidths=0.4, color='tab:blue')
-        plt.xlabel('Predicted Phase', fontsize=24)
-        plt.ylabel('Collection Time', fontsize=24)
+        plt.xlabel('Predicted Phase (Hours)', fontsize=16)
+        plt.ylabel('Collection Time (Hours)', fontsize=16)
 
         subtitle = f'Shift={best_shift:.2f}h'
         if flipped:
             subtitle += ' (flipped)'
+        plt.title(f'{celltype} Phase vs Metadata\n{subtitle}', fontsize=14)
 
         plt.grid(True, alpha=0.3, linestyle='--')
         plt.tight_layout()
@@ -861,6 +430,7 @@ def generate_phase_metadata_comparison(results_df: pd.DataFrame, metadata_csv: s
 
         metrics_rows = []
         
+        # 检查是否有 Cell_Type 列（多细胞类型情况）
         if 'Cell_Type' in results_df.columns:
             print("检测到多细胞类型数据，按细胞类型分别处理")
             celltypes = pd.unique(results_df['Cell_Type'].dropna())

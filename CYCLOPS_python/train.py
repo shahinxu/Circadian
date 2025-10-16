@@ -2,8 +2,10 @@ def plot_decoder_fits(model, n_components, save_path):
     model.eval()
     phases = torch.linspace(0, 2 * np.pi, 200)
     phases = phases.to(next(model.parameters()).device) 
+    # Convert phase angles to 2D coordinates for decoder input
+    phase_coords = torch.stack([torch.cos(phases), torch.sin(phases)], dim=1)  # (200, 2)
     with torch.no_grad():
-        decoded = model.decode(phases)  # (200, n_components)
+        decoded = model.decode(phase_coords)  # (200, n_components)
         decoded = decoded.cpu().numpy()
     plt.figure(figsize=(8, 5))
     for i in range(n_components):
@@ -88,18 +90,20 @@ def train_model(model, train_dataset, preprocessing_info,
             model.train()
             optimizer.zero_grad()
             # Forward
-            phase_coords, _, _ = model(expressions_tensor, celltype_indices_tensor)
+            phase_coords, _, reconstructed = model(expressions_tensor, celltype_indices_tensor)
             phase_coords_norm = torch.norm(phase_coords, dim=1, keepdim=True) + 1e-8
             phase_coords_normalized = phase_coords / phase_coords_norm
             # CircularNode loss: MSE between phase_coords and phase_coords_normalized
             circular_loss = nn.functional.mse_loss(phase_coords, phase_coords_normalized)
-            total_loss = circular_loss
+            # Reconstruction loss: MSE between input and reconstructed output
+            recon_loss = nn.functional.mse_loss(reconstructed, expressions_tensor)
+            total_loss = circular_loss + lambda_recon * recon_loss
             total_loss.backward()
             optimizer.step()
             train_losses.append(total_loss.item())
             scheduler.step(total_loss.item())
-            if epoch % 10 == 0 or epoch == num_epochs - 1:
-                print(f"Epoch {epoch}: circular_loss={circular_loss.item():.4f}")
+            if epoch % 10 == 0:
+                print(f"Epoch {epoch}: circular_loss={circular_loss.item():.4f}, recon_loss={recon_loss.item():.4f}")
             pbar.update(1)
     return train_losses
 
@@ -120,7 +124,6 @@ def main():
     parser.add_argument("--device", default='cuda')
     parser.add_argument("--random_seed", type=int, default=42)
     parser.add_argument("--n_genes_plot", type=int, default=10)
-    # parser.add_argument("--custom_genes", nargs='*', default=None, required=True)
     parser.add_argument("--sine_predictor_hidden", type=int, default=64)
     args = parser.parse_args()
 

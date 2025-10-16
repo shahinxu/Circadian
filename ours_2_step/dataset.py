@@ -22,131 +22,98 @@ class ExpressionDataset(Dataset):
             sample['celltype'] = self.celltypes[idx]
         return sample
 
+def blunt_percentile(data, percent=0.975):
+    # data: (samples, genes)
+    n = data.shape[0]
+    nfloor = int(1 + np.floor((1 - percent) * n))
+    nceiling = int(np.ceil(percent * n))
+    sorted_data = np.sort(data, axis=0)
+    row_min = sorted_data[nfloor, :]
+    row_max = sorted_data[nceiling-1, :]
+    data = np.where(data < row_min, row_min, data)
+    data = np.where(data > row_max, row_max, data)
+    return data
 
-def load_and_preprocess_train_data(train_file, n_components=50, max_samples=100, random_state=42,
-                                   select_top_genes = None):
-    print("=== 加载训练数据 ===")
+def mean_normalize(data):
+    gene_means = np.mean(data, axis=0, keepdims=True)
+    return (data - gene_means) / gene_means
+
+def load_and_preprocess_train_data(train_file, n_components=50, blunt_percent=0.975, do_mean_normalize=True, min_cv=0.14, max_cv=0.7, min_mean_rank=10000):
+    print("=== Loading training data ===")
     df = pd.read_csv(train_file, low_memory=False)
-    
-    celltype_row = df[df['Gene_Symbol'] == 'celltype_D']
-    time_row = df[df['Gene_Symbol'] == 'time_C']
-    
-    has_celltype = not celltype_row.empty
-    has_time = not time_row.empty
-    
-    print(f"训练集包含时间信息: {has_time}")
-    print(f"训练集包含细胞类型信息: {has_celltype}")
-    
     sample_columns = [col for col in df.columns if col != 'Gene_Symbol']
-    n_samples = len(sample_columns)
-    
-    celltypes = None
-    times = None
-    
-    if has_celltype:
-        celltypes = celltype_row.iloc[0][sample_columns].values
-    print(f"训练集细胞类型: {np.unique(np.asarray(celltypes))}")
-    
-    if has_time:
-        times = time_row.iloc[0][sample_columns].values.astype(float)
-        print(f"训练集时间范围: {times.min():.2f} - {times.max():.2f} 小时")
-    
     gene_df = df[~df['Gene_Symbol'].isin(['celltype_D', 'time_C'])].copy()
-    gene_names = gene_df['Gene_Symbol'].values
-    expression_data = gene_df[sample_columns].values.T
-    
-    print(f"训练集原始基因数量: {len(gene_names)}")
-    
-    print("进行训练数据标准化...")
-    selected_gene_names = gene_names
-    if select_top_genes is not None and select_top_genes > 0:
-        k = min(select_top_genes, expression_data.shape[1])
-        gene_var = np.nanvar(expression_data, axis=0)
-        top_idx = np.argsort(-gene_var)[:k]
-        expression_data = expression_data[:, top_idx]
-        selected_gene_names = gene_names[top_idx]
-
+    expression_data = gene_df[sample_columns].values.T  # (samples, genes)
+    # 1. Outlier truncation
+    expression_data = blunt_percentile(expression_data, percent=blunt_percent)
+    # 2. Gene filtering (CV and mean)
+    gene_means = np.mean(expression_data, axis=0)
+    gene_stds = np.std(expression_data, axis=0)
+    gene_cvs = gene_stds / (gene_means + 1e-8)
+    mean_rank = np.argsort(-gene_means)  # descending
+    keep = (gene_cvs > min_cv) & (gene_cvs < max_cv) & (mean_rank < min_mean_rank)
+    expression_data = expression_data[:, keep]
+    # 3. Mean normalization
+    if do_mean_normalize:
+        expression_data = mean_normalize(expression_data)
+    # 4. Standardization
     scaler = StandardScaler()
     expression_scaled = scaler.fit_transform(expression_data)
-    selected_expression, pca_model, explained_variance = create_eigengenes(
-        expression_scaled, n_components
-    )
-        
-    celltype_to_idx = {}
-    if has_celltype:
-        unique_celltypes = np.unique(np.asarray(celltypes))
-        celltype_to_idx = {ct: idx for idx, ct in enumerate(unique_celltypes)}
-        print(f"细胞类型映射: {celltype_to_idx}")
-    
-    train_dataset = ExpressionDataset(selected_expression, times, celltypes)
-    
+    # 5. PCA
+    pca_components, pca_model, explained_variance = create_eigengenes(expression_scaled, n_components)
+    train_dataset = ExpressionDataset(pca_components)
     preprocessing_info = {
         'scaler': scaler,
         'pca_model': pca_model,
         'explained_variance': explained_variance,
-        'train_has_time': has_time,
-        'train_has_celltype': has_celltype,
-        'celltype_to_idx': celltype_to_idx,
-        'n_celltypes': len(celltype_to_idx) if celltype_to_idx else 0,
+        'n_genes': expression_scaled.shape[1],
+        'n_samples': expression_scaled.shape[0],
         'n_components': n_components,
-        'original_samples': n_samples,
-        'all_gene_names': gene_names,
-        'selected_gene_names': selected_gene_names,
-        'period_hours': 24.0,
-        'sample_columns': sample_columns
+        'gene_keep_mask': keep,
+        'do_mean_normalize': do_mean_normalize,
+        'blunt_percent': blunt_percent
     }
-    
     return train_dataset, preprocessing_info
 
 def load_and_preprocess_test_data(test_file, preprocessing_info):
-    print("\n=== 加载测试数据 ===")
+    print("\n=== Loading test data ===")
     df = pd.read_csv(test_file, low_memory=False)
-    
     celltype_row = df[df['Gene_Symbol'] == 'celltype_D']
     time_row = df[df['Gene_Symbol'] == 'time_C']
-    
     has_celltype = not celltype_row.empty
     has_time = not time_row.empty
-    
-    print(f"测试集包含时间信息: {has_time}")
-    print(f"测试集包含细胞类型信息: {has_celltype}")
-    
+    print(f"Test set has time info: {has_time}")
+    print(f"Test set has celltype info: {has_celltype}")
     sample_columns = [col for col in df.columns if col != 'Gene_Symbol']
-    n_samples = len(sample_columns)
-    
     celltypes = None
     times = None
-    
     if has_celltype:
         celltypes = celltype_row.iloc[0][sample_columns].values
-        print(f"测试集细胞类型: {np.unique(np.asarray(celltypes))}")
-    
+        print(f"Test set celltypes: {np.unique(np.asarray(celltypes))}")
     if has_time:
         times = time_row.iloc[0][sample_columns].values.astype(float)
-        print(f"测试集时间范围: {times.min():.2f} - {times.max():.2f} 小时")
-    
+        print(f"Test set time range: {times.min():.2f} - {times.max():.2f} hours")
     gene_df = df[~df['Gene_Symbol'].isin(['celltype_D', 'time_C'])].copy()
     test_gene_names = gene_df['Gene_Symbol'].values
     test_expression_data = gene_df[sample_columns].values.T
-    
-    print(f"测试集原始基因数量: {len(test_gene_names)}")
-    print(f"测试集样本数量: {n_samples}")
-    
+    # 1. Only keep genes selected in training
+    keep = preprocessing_info['gene_keep_mask']
+    test_expression_data = test_expression_data[:, keep]
+    # 2. Outlier truncation
+    test_expression_data = blunt_percentile(test_expression_data, percent=preprocessing_info['blunt_percent'])
+    # 3. Mean normalization
+    if preprocessing_info['do_mean_normalize']:
+        test_expression_data = mean_normalize(test_expression_data)
+    # 4. Standardization
     scaler = preprocessing_info['scaler']
+    test_expression_scaled = scaler.transform(test_expression_data)
+    # 5. PCA
     pca_model = preprocessing_info['pca_model']
     n_components = preprocessing_info['n_components']
-    
-    print("使用训练集的标准化参数处理测试数据...")
-    test_expression_scaled = scaler.transform(test_expression_data)
-    
-    print("使用训练集的细胞类型感知变换器处理测试数据...")
     test_spc_components = pca_model.transform(test_expression_scaled)
-    
-    print(f"细胞类型感知变换后的测试数据维度: {test_spc_components.shape}")
-    print(f"期望的组件数量: {n_components}")
-    
+    print(f"Test data after PCA shape: {test_spc_components.shape}")
+    print(f"Expected n_components: {n_components}")
     test_dataset = ExpressionDataset(test_spc_components, times, celltypes)
-    
     test_preprocessing_info = preprocessing_info.copy()
     test_preprocessing_info.update({
         'test_has_time': has_time,
@@ -155,5 +122,4 @@ def load_and_preprocess_test_data(test_file, preprocessing_info):
         'test_gene_names': test_gene_names,
         'test_spc_components': test_spc_components
     })
-    
     return test_dataset, test_preprocessing_info
