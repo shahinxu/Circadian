@@ -118,7 +118,7 @@ def main():
         model, eigengene_data, config, device
     )
 
-    T, W, W_sparse = model.get_graph_matrices()
+    W_sparse = model.get_graph_matrices()
     inferred_times = model.infer_node_times(W_sparse)
 
     model.eval()

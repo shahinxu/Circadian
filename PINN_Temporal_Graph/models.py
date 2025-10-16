@@ -126,7 +126,6 @@ class TemporalGraphPINN(nn.Module):
         times[reference_node] = 0.0
 
         for iteration in range(max_iterations):
-            new_times = times.clone()
 
             edge_mask = W_sparse.abs() > 1e-6
             potential_times = times.unsqueeze(1) + W_sparse
