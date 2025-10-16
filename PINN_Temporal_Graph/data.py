@@ -21,14 +21,14 @@ class CircadianDataset:
     def __getitem__(self, idx):
         return self.time_points[idx], self.expressions[idx]
 
-def load_expression_data(file_path, time_col='time', sep='\t'):
-    df = pd.read_csv(file_path, sep=sep, index_col=0)
+def load_expression_data(file_path, time_col='time', sep=','):
+    df = pd.read_csv(file_path, sep=sep)
 
     if time_col in df.columns:
         time_points = df[time_col].values
         expression_data = df.drop(columns=[time_col]).values
     else:
-        time_points = df.index.values if df.index.name == time_col else df.iloc[:, 0].values
+        time_points = df.iloc[:, 0].values
         expression_data = df.iloc[:, 1:].values
 
     return expression_data, time_points

@@ -9,7 +9,7 @@ from utils import (
     load_config, set_random_seed, create_experiment_dir,
     save_checkpoint, early_stopping, plot_graph_structure
 )
-from dataset import load_expression_data
+from data import load_expression_data
 
 def Trainer(model: TemporalGraphPINN, eigengene_data, config, device):
     optimizer = optim.Adam(
@@ -70,9 +70,9 @@ def Trainer(model: TemporalGraphPINN, eigengene_data, config, device):
             best_loss = total_loss
             save_checkpoint(model, optimizer, epoch, total_loss, exp_dir / 'best_model.pth')
 
-        if early_stopping(train_losses, patience, min_delta):
-            tqdm.write(f"Early stopping at epoch {epoch+1}")
-            break
+        # if early_stopping(train_losses, patience, min_delta):
+        #     tqdm.write(f"Early stopping at epoch {epoch+1}")
+        #     break
 
     return train_losses, loss_components_history, exp_dir
 
@@ -105,7 +105,6 @@ def main():
 
     model = TemporalGraphPINN(
         n_nodes=n_samples,
-        node_dim=config['model']['node_dim'],
         n_eigengenes=n_eigengenes
     ).to(device)
 

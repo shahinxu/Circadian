@@ -26,14 +26,18 @@ def physics_loss(
     expressions_pred = model.omniscient_net(inferred_times.unsqueeze(-1))
     expressions_pred.requires_grad_(True)
 
-    dEdt_network = torch.autograd.grad(
-        outputs=expressions_pred,
-        inputs=inferred_times,
-        grad_outputs=torch.ones_like(expressions_pred),
-        create_graph=True,
-        retain_graph=True,
-        only_inputs=True
-    )[0].unsqueeze(-1)
+    dEdt_list = []
+    for i in range(expressions_pred.shape[1]):
+        grad_i = torch.autograd.grad(
+            outputs=expressions_pred[:, i],
+            inputs=inferred_times,
+            grad_outputs=torch.ones_like(inferred_times),
+            create_graph=True,
+            retain_graph=True
+        )[0]
+        dEdt_list.append(grad_i)
+
+    dEdt_network = torch.stack(dEdt_list, dim=1)
 
     _, _, W_sparse = model.get_graph_matrices()
     edge_mask = (W_sparse.abs() > 1e-6)

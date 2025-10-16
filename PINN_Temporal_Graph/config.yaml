@@ -21,12 +21,12 @@ loss_weights:
   physics: 1.0            # Derivative consistency between network and graph
   tree: 0.01              # Tree structure constraint (reduced for sparse graphs)
   sign_consistency: 0.1    # Sign consistency along paths
-  sparsity: 0.001         # Sparsity constraint (further reduced to allow edges)
+  sparsity: 0.1         # Sparsity constraint (further reduced to allow edges)
 
 # Data Parameters
 data:
-  n_samples: 100
-  noise_level: 0.1
+  n_samples: 20
+  noise_level: 0.02
   period: 24.0
 
 # Graph Constraints
@@ -46,4 +46,4 @@ experiment:
 # System Settings
 system:
   device: "auto"  # "auto", "cuda", or "cpu"
-  data_path: "data/synthetic_eigengenes_100x5.csv"  # Path to real data CSV, null for synthetic data
+  data_path: null  # Path to real data CSV, null for synthetic data
