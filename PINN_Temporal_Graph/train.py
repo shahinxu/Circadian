@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 import argparse
 import yaml
+from tqdm import tqdm
 
 from models import TemporalGraphPINN
 from losses import total_unsupervised_loss
@@ -46,7 +47,13 @@ def train_unsupervised_model(model, eigengene_data, config, device):
     exp_dir = create_experiment_dir(config['experiment']['save_dir'],
                                    config['experiment']['name'])
 
-    for epoch in range(config['training']['n_epochs']):
+    # Create progress bar
+    pbar = tqdm(range(config['training']['n_epochs']), 
+                desc="Training", 
+                unit="epoch",
+                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
+
+    for epoch in pbar:
         model.train()
 
         optimizer.zero_grad()
@@ -57,7 +64,8 @@ def train_unsupervised_model(model, eigengene_data, config, device):
             lambda_recon=config['loss_weights']['reconstruction'],
             lambda_physics=config['loss_weights']['physics'],
             lambda_tree=config['loss_weights']['tree'],
-            lambda_sign=config['loss_weights']['sign_consistency']
+            lambda_sign=config['loss_weights']['sign_consistency'],
+            lambda_sparsity=config['loss_weights']['sparsity']
         )
 
         # Backward pass
@@ -69,12 +77,13 @@ def train_unsupervised_model(model, eigengene_data, config, device):
         train_losses.append(total_loss.item())
         loss_components_history.append(loss_components)
 
-        if epoch % config['experiment']['log_interval'] == 0:
-            print(f"Epoch {epoch}: Total Loss = {total_loss.item():.4f}")
-            print(f"  Reconstruction: {loss_components['reconstruction']:.4f}")
-            print(f"  Physics: {loss_components['physics']:.4f}")
-            print(f"  Tree: {loss_components['tree']:.4f}")
-            print(f"  Sign Consistency: {loss_components['sign_consistency']:.4f}")
+        # Update progress bar with current loss info
+        pbar.set_postfix({
+            'loss': f'{total_loss.item():.4f}',
+            'recon': f'{loss_components["reconstruction"]:.4f}',
+            'physics': f'{loss_components["physics"]:.4f}',
+            'sparsity': f'{loss_components["sparsity"]:.4f}'
+        })
 
         # Save checkpoints
         if config['experiment']['save_checkpoints'] and total_loss < best_loss:
@@ -82,9 +91,11 @@ def train_unsupervised_model(model, eigengene_data, config, device):
             save_checkpoint(model, optimizer, epoch, total_loss, exp_dir / 'best_model.pth')
 
         # Early stopping
-        if early_stopping(train_losses, config['training']['patience'], config['training']['min_delta']):
-            print(f"Early stopping at epoch {epoch}")
+        if early_stopping(train_losses, config['training']['patience'], float(config['training']['min_delta'])):
+            pbar.set_description(f"Early stopping at epoch {epoch}")
             break
+
+    pbar.close()
 
     # Save final results
     torch.save(model.state_dict(), exp_dir / 'final_model.pth')

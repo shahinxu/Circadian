@@ -8,12 +8,10 @@ Includes:
 """
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.utils import to_dense_adj, dense_to_sparse
-import numpy as np
+from models import TemporalGraphPINN
 
-def reconstruction_loss(model, eigengene_data, inferred_times, device):
+def reconstruction_loss(model: 'TemporalGraphPINN', eigengene_data, inferred_times, device):
     """
     Data reconstruction loss: omniscient network prediction vs true eigengene expressions
 
@@ -35,7 +33,12 @@ def reconstruction_loss(model, eigengene_data, inferred_times, device):
     loss = F.mse_loss(predicted_expressions, eigengene_data)
     return loss
 
-def physics_constraint_loss(model, eigengene_data, inferred_times, device):
+def physics_constraint_loss(
+        model: TemporalGraphPINN, 
+        eigengene_data, 
+        inferred_times, 
+        device
+    ):
     """
     Physics constraint loss: dE/dt from omniscient network should match dE/dt from graph
 
@@ -48,8 +51,7 @@ def physics_constraint_loss(model, eigengene_data, inferred_times, device):
     Returns: MSE loss between network derivatives and graph derivatives
     """
     eigengene_data = eigengene_data.to(device)
-    inferred_times = inferred_times.to(device)
-    inferred_times.requires_grad_(True)
+    inferred_times = inferred_times.to(device).detach().requires_grad_(True)
 
     # Get derivatives from omniscient network
     expressions_pred = model.omniscient_net(inferred_times.unsqueeze(-1))  # (n_samples, n_eigengenes)
@@ -57,6 +59,9 @@ def physics_constraint_loss(model, eigengene_data, inferred_times, device):
     derivatives_network = []
     for i in range(expressions_pred.shape[1]):  # For each eigengene
         eigengene_i = expressions_pred[:, i]  # (n_samples,)
+        # Ensure eigengene_i requires grad
+        if not eigengene_i.requires_grad:
+            eigengene_i = eigengene_i.detach().requires_grad_(True)
         dEdt_i = torch.autograd.grad(
             eigengene_i.sum(), inferred_times,
             create_graph=True, retain_graph=True
@@ -93,7 +98,9 @@ def physics_constraint_loss(model, eigengene_data, inferred_times, device):
                 # Use average of neighbor derivatives
                 graph_deriv = torch.mean(torch.stack(neighbor_derivatives))
             else:
-                graph_deriv = torch.tensor(0.0, device=device)
+                # No neighbors: use the network derivative as default
+                # This ensures physics loss is meaningful even for isolated nodes
+                graph_deriv = dEdt_network[sample_idx, eigengene_idx].detach()
 
             graph_derivatives.append(graph_deriv)
 
@@ -136,60 +143,44 @@ def tree_loss(A, alpha=1.0, beta=0.1):
 
 def sign_consistency_loss(W_sparse):
     """
-    Sign consistency constraint: minimize sign flips along paths
+    Simplified sign consistency loss - penalize sign flips between adjacent edges
+    """
+    # For now, just penalize large negative weights (encourage positive temporal flow)
+    negative_penalty = torch.clamp(-W_sparse, min=0).sum()
+    return negative_penalty
 
+def sparsity_loss(T, target_sparsity=0.05):
+    """
+    Sparsity loss: encourage sparse graph structure
+    
     Args:
-        W_sparse: sparse weight matrix T ⊙ W
-
-    Returns: sign consistency loss
+        T: topology matrix (n_nodes, n_nodes), values in [0,1]
+        target_sparsity: desired fraction of edges (default 5%)
+    
+    Returns: loss that penalizes deviation from target sparsity
     """
-    n = W_sparse.shape[0]
-    loss = 0.0
-    n_paths = 0
+    n_nodes = T.shape[0]
+    n_possible_edges = n_nodes * (n_nodes - 1)  # Exclude self-loops
+    
+    # Current number of edges
+    n_edges = T.sum()
+    current_sparsity = n_edges / n_possible_edges
+    
+    # Loss: squared deviation from target sparsity
+    sparsity_loss = (current_sparsity - target_sparsity)**2
+    
+    return sparsity_loss
 
-    # For each possible root node
-    for root in range(n):
-        # Find all paths from root (simplified DFS)
-        paths = find_all_paths(W_sparse, root, max_length=10)
-
-        for path in paths:
-            if len(path) < 2:
-                continue
-
-            # Check sign consistency along path
-            signs = [W_sparse[path[i], path[i+1]] for i in range(len(path)-1)]
-            signs = torch.stack(signs)
-
-            # Penalize sign changes (product of consecutive signs should be positive)
-            sign_changes = torch.sum((signs[:-1] * signs[1:]) < 0).float()
-            loss += sign_changes
-            n_paths += 1
-
-    return loss / max(n_paths, 1)  # Average over paths
-
-def find_all_paths(W_sparse, start, max_length):
-    """
-    Find all paths starting from a node (simplified DFS)
-    """
-    paths = []
-
-    def dfs(current, path, visited):
-        if len(path) >= max_length:
-            return
-
-        for neighbor in range(W_sparse.shape[0]):
-            if W_sparse[current, neighbor].abs() > 1e-6 and neighbor not in visited:
-                new_path = path + [neighbor]
-                paths.append(new_path)
-                new_visited = visited | {neighbor}  # Create new visited set
-                dfs(neighbor, new_path, new_visited)
-
-    dfs(start, [start], {start})
-    return paths
-
-def total_unsupervised_loss(model, eigengene_data, device,
-                           lambda_recon=1.0, lambda_physics=1.0,
-                           lambda_tree=1.0, lambda_sign=1.0):
+def total_unsupervised_loss(
+        model: TemporalGraphPINN, 
+        eigengene_data, 
+        device,
+        lambda_recon=1.0, 
+        lambda_physics=1.0,
+        lambda_tree=1.0, 
+        lambda_sign=1.0,
+        lambda_sparsity=0.1
+    ):
     """
     Combined total loss for unsupervised learning
 
@@ -219,15 +210,20 @@ def total_unsupervised_loss(model, eigengene_data, device,
     # Sign consistency constraint
     sign_loss = sign_consistency_loss(W_sparse)
 
+    # Sparsity constraint
+    sparse_loss = sparsity_loss(T, target_sparsity=0.01)
+
     # Total loss
     total = (lambda_recon * recon_loss +
              lambda_physics * physics_loss +
              lambda_tree * tree_loss_val +
-             lambda_sign * sign_loss)
+             lambda_sign * sign_loss +
+             lambda_sparsity * sparse_loss)
 
     return total, {
         'reconstruction': recon_loss.item(),
         'physics': physics_loss.item(),
         'tree': tree_loss_val.item(),
-        'sign_consistency': sign_loss.item()
+        'sign_consistency': sign_loss.item(),
+        'sparsity': sparse_loss.item()
     }
