@@ -1,17 +1,14 @@
 import torch
 import torch.optim as optim
-import numpy as np
-from pathlib import Path
 import argparse
-import yaml
 from tqdm import tqdm
 
 from models import TemporalGraphPINN
-from losses import total_unsupervised_loss
+from losses import compute_loss
 from utils import *
 from data import load_expression_data
 
-def train_unsupervised_model(model, eigengene_data, config, device):
+def Trainer(model, eigengene_data, config, device):
     optimizer = optim.Adam(model.parameters(),
                           lr=config['training']['learning_rate'],
                           weight_decay=config['training']['weight_decay'])
@@ -39,7 +36,7 @@ def train_unsupervised_model(model, eigengene_data, config, device):
 
         optimizer.zero_grad()
 
-        total_loss, loss_components = total_unsupervised_loss(
+        total_loss, loss_components = compute_loss(
             model, eigengene_data, device,
             lambda_recon=config['loss_weights']['reconstruction'],
             lambda_physics=config['loss_weights']['physics'],
@@ -72,12 +69,6 @@ def train_unsupervised_model(model, eigengene_data, config, device):
             break
 
     pbar.close()
-
-    T, W, W_sparse = model.get_graph_matrices()
-    inferred_times = model.infer_node_times(W_sparse)
-
-    torch.save(model.state_dict(), exp_dir / 'final_model.pth')
-    np.save(exp_dir / 'inferred_times.npy', inferred_times.detach().cpu().numpy())
 
     return train_losses, loss_components_history, exp_dir
 
@@ -114,17 +105,16 @@ def main():
 
     set_random_seed(42)
 
-    train_losses, loss_components, exp_dir = train_unsupervised_model(
+    _, _, exp_dir = Trainer(
         model, eigengene_data, config, device
     )
 
-    W_sparse = model.get_graph_matrices()
+    _, _, W_sparse = model.get_graph_matrices()
     inferred_times = model.infer_node_times(W_sparse)
 
     model.eval()
-    with torch.no_grad():
-        final_predictions = model(inferred_times)
-        np.save(exp_dir / 'final_predictions.npy', final_predictions.cpu().numpy())
+
+    plot_graph_structure(W_sparse, save_path=exp_dir / 'final_graph.png')
 
 if __name__ == "__main__":
     main()

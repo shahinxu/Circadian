@@ -2,64 +2,74 @@ import torch
 import torch.nn.functional as F
 from models import TemporalGraphPINN
 
-def reconstruction_loss(model, eigengene_data, inferred_times, device):
+def reconstruction_loss(
+        model: TemporalGraphPINN, 
+        eigengene_data, 
+        inferred_times, 
+        device
+    ):
     eigengene_data = eigengene_data.to(device)
     inferred_times = inferred_times.to(device)
     predicted_expressions = model.omniscient_net(inferred_times.unsqueeze(-1))
     loss = F.mse_loss(predicted_expressions, eigengene_data)
     return loss
 
-def physics_constraint_loss(model, eigengene_data, inferred_times, device):
+def physics_constraint_loss(
+        model: TemporalGraphPINN,
+        eigengene_data, 
+        inferred_times, 
+        device
+    ):
     eigengene_data = eigengene_data.to(device)
     inferred_times = inferred_times.to(device).detach().requires_grad_(True)
 
     expressions_pred = model.omniscient_net(inferred_times.unsqueeze(-1))
+    expressions_pred.requires_grad_(True)
 
-    derivatives_network = []
-    for i in range(expressions_pred.shape[1]):
-        eigengene_i = expressions_pred[:, i]
-        if not eigengene_i.requires_grad:
-            eigengene_i = eigengene_i.detach().requires_grad_(True)
-        dEdt_i = torch.autograd.grad(
-            eigengene_i.sum(), inferred_times,
-            create_graph=True, retain_graph=True
-        )[0]
-        derivatives_network.append(dEdt_i)
+    dEdt_network = torch.autograd.grad(
+        outputs=expressions_pred,
+        inputs=inferred_times,
+        grad_outputs=torch.ones_like(expressions_pred),
+        create_graph=True,
+        retain_graph=True,
+        only_inputs=True
+    )[0].unsqueeze(-1)
 
-    dEdt_network = torch.stack(derivatives_network, dim=1)
+    _, _, W_sparse = model.get_graph_matrices()
+    edge_mask = (W_sparse.abs() > 1e-6)
 
-    T, W, W_sparse = model.get_graph_matrices()
+    N, D = eigengene_data.shape
+    E_i = eigengene_data.unsqueeze(1).expand(-1, N, -1)
+    E_j = eigengene_data.unsqueeze(0).expand(N, -1, -1)
+    t_i = inferred_times.unsqueeze(1).expand(-1, N)
+    t_j = inferred_times.unsqueeze(0).expand(N, -1)
 
-    dEdt_graph = torch.zeros_like(dEdt_network)
+    time_diff = t_j - t_i
+    feature_diff = E_j - E_i
 
-    for sample_idx in range(len(inferred_times)):
-        graph_derivatives = []
+    safe_time_diff = torch.where(
+        time_diff.abs() < 1e-6, 
+        torch.ones_like(time_diff), 
+        time_diff
+    )
 
-        for eigengene_idx in range(eigengene_data.shape[1]):
-            neighbor_derivatives = []
+    graph_derivatives = torch.where(
+        edge_mask.unsqueeze(-1),
+        feature_diff / safe_time_diff.unsqueeze(-1),
+        torch.zeros_like(feature_diff)
+    )
 
-            for neighbor_idx in range(W_sparse.shape[0]):
-                edge_weight = W_sparse[sample_idx, neighbor_idx]
-                if edge_weight.abs() > 1e-6:
-                    eigengene_neighbor = eigengene_data[neighbor_idx, eigengene_idx]
-                    eigengene_current = eigengene_data[sample_idx, eigengene_idx]
-                    time_diff = inferred_times[neighbor_idx] - inferred_times[sample_idx]
+    neighbor_count = edge_mask.sum(dim=1).clamp_min(1).unsqueeze(-1)
+    dEdt_graph = graph_derivatives.sum(dim=1) / neighbor_count
 
-                    if time_diff.abs() > 1e-6:
-                        derivative = (eigengene_neighbor - eigengene_current) / time_diff
-                        neighbor_derivatives.append(derivative)
+    has_neighbors = (neighbor_count.squeeze(-1) > 0).unsqueeze(-1)
+    dEdt_graph = torch.where(
+        has_neighbors,
+        dEdt_graph,
+        dEdt_network.detach()
+    )
 
-            if neighbor_derivatives:
-                graph_deriv = torch.mean(torch.stack(neighbor_derivatives))
-            else:
-                graph_deriv = dEdt_network[sample_idx, eigengene_idx].detach()
-
-            graph_derivatives.append(graph_deriv)
-
-        dEdt_graph[sample_idx] = torch.stack(graph_derivatives)
-
-    physics_loss = F.mse_loss(dEdt_network, dEdt_graph)
-    return physics_loss
+    return F.mse_loss(dEdt_network, dEdt_graph)
 
 def tree_loss(A, alpha=1.0, beta=0.1):
     n = A.size(0)
@@ -76,22 +86,17 @@ def tree_loss(A, alpha=1.0, beta=0.1):
 
     return alpha * E_loss + beta * Connect_loss
 
-def sign_consistency_loss(W_sparse):
+def negative_loss(W_sparse):
     negative_penalty = torch.clamp(-W_sparse, min=0).sum()
     return negative_penalty
 
-def sparsity_loss(T, target_sparsity=0.05):
-    n_nodes = T.shape[0]
-    n_possible_edges = n_nodes * (n_nodes - 1)
-    
-    n_edges = T.sum()
-    current_sparsity = n_edges / n_possible_edges
-    
-    sparsity_loss = (current_sparsity - target_sparsity)**2
+def sparsity_loss(T):    
+    n_edges = T.sum()    
+    sparsity_loss = n_edges
     
     return sparsity_loss
 
-def total_unsupervised_loss(
+def compute_loss(
         model, 
         eigengene_data, 
         device,
@@ -101,13 +106,13 @@ def total_unsupervised_loss(
         lambda_sign=1.0,
         lambda_sparsity=0.01
     ):
-    T, W, W_sparse = model.get_graph_matrices()
+    T, _, W_sparse = model.get_graph_matrices()
     inferred_times = model.infer_node_times(W_sparse)
 
     recon_loss = reconstruction_loss(model, eigengene_data, inferred_times, device)
     physics_loss = physics_constraint_loss(model, eigengene_data, inferred_times, device)
     tree_loss_val = tree_loss(T)
-    sign_loss = sign_consistency_loss(W_sparse)
+    sign_loss = negative_loss(W_sparse)
     sparse_loss = sparsity_loss(T)
 
     total = (lambda_recon * recon_loss +
