@@ -47,22 +47,112 @@ def plot_training_history(train_losses, val_losses, save_path=None):
     plt.show()
 
 def plot_graph_structure(W_sparse, node_labels=None, save_path=None):
+    try:
+        import networkx as nx
+    except ImportError:
+        print("networkx not installed, falling back to matrix visualization")
+        plot_graph_matrix(W_sparse, node_labels, save_path)
+        return
+
     W_np = W_sparse.detach().cpu().numpy()
+    n_nodes = W_np.shape[0]
 
-    plt.figure(figsize=(8, 6))
-    im = plt.imshow(W_np, cmap='coolwarm', vmin=-1, vmax=1)
-    plt.colorbar(im)
+    G = nx.DiGraph()
 
-    if node_labels:
-        plt.xticks(range(len(node_labels)), node_labels, rotation=45)
-        plt.yticks(range(len(node_labels)), node_labels)
+    for i in range(n_nodes):
+        G.add_node(i, label=f'Node {i+1}' if node_labels is None else node_labels[i])
 
-    plt.xlabel('Target Node')
-    plt.ylabel('Source Node')
-    plt.title('Learned Graph Structure (Edge Weights)')
+    edges = []
+    for i in range(n_nodes):
+        for j in range(n_nodes):
+            if i != j and abs(W_np[i, j]) > 1e-6:
+                edges.append((i, j, W_np[i, j]))
+
+    if not edges:
+        print("No edges found in the graph")
+        plt.figure(figsize=(8, 6))
+        plt.text(0.5, 0.5, 'No edges in graph', ha='center', va='center', fontsize=16)
+        plt.axis('off')
+        if save_path:
+            plt.savefig(save_path)
+        plt.show()
+        return
+
+    pos = nx.spring_layout(G, seed=42, k=1.5, iterations=50)
+
+    plt.figure(figsize=(12, 8))
+
+    edge_weights = [abs(w) for _, _, w in edges]
+    max_weight = max(edge_weights) if edge_weights else 1.0
+    min_weight = min(edge_weights) if edge_weights else 0.0
+
+    positive_edges = [(i, j, w) for i, j, w in edges if w > 0]
+    negative_edges = [(i, j, w) for i, j, w in edges if w < 0]
+
+    if positive_edges:
+        pos_weights = [abs(w) for _, _, w in positive_edges]
+        pos_widths = [2 + 8 * (w - min_weight) / (max_weight - min_weight + 1e-6) for w in pos_weights]
+        pos_colors = ['red' if w > 0 else 'blue' for w in [w for _, _, w in positive_edges]]
+
+        nx.draw_networkx_edges(G, pos,
+                              edgelist=[(i, j) for i, j, _ in positive_edges],
+                              width=pos_widths,
+                              edge_color='red',
+                              alpha=0.7,
+                              arrows=True,
+                              arrowsize=20,
+                              connectionstyle='arc3,rad=0.1')
+
+    if negative_edges:
+        neg_weights = [abs(w) for _, _, w in negative_edges]
+        neg_widths = [2 + 8 * (w - min_weight) / (max_weight - min_weight + 1e-6) for w in neg_weights]
+
+        nx.draw_networkx_edges(G, pos,
+                              edgelist=[(i, j) for i, j, _ in negative_edges],
+                              width=neg_widths,
+                              edge_color='blue',
+                              alpha=0.7,
+                              arrows=True,
+                              arrowsize=20,
+                              connectionstyle='arc3,rad=-0.1')
+
+    node_sizes = [800 + 200 * (G.degree(i) / max(1, G.number_of_edges())) for i in G.nodes()]
+    nx.draw_networkx_nodes(G, pos, node_size=node_sizes, node_color='lightblue', alpha=0.8)
+
+    labels = {i: f'Node {i+1}' if node_labels is None else node_labels[i] for i in G.nodes()}
+    nx.draw_networkx_labels(G, pos, labels, font_size=10, font_weight='bold')
+
+    plt.title(f'Learned Graph Structure\n{len(edges)} edges, {n_nodes} nodes', fontsize=14, pad=20)
+    plt.axis('off')
+
+    plt.tight_layout()
 
     if save_path:
-        plt.savefig(save_path)
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+
+def plot_graph_matrix(W_sparse, node_labels=None, save_path=None):
+    """Fallback matrix visualization"""
+    W_np = W_sparse.detach().cpu().numpy()
+
+    plt.figure(figsize=(10, 8))
+    im = plt.imshow(W_np, cmap='coolwarm', vmin=-1, vmax=1)
+    plt.colorbar(im, shrink=0.8)
+
+    if node_labels:
+        plt.xticks(range(len(node_labels)), node_labels, rotation=45, ha='right')
+        plt.yticks(range(len(node_labels)), node_labels)
+
+    plt.xlabel('Target Node', fontsize=12)
+    plt.ylabel('Source Node', fontsize=12)
+    plt.title('Learned Graph Structure (Adjacency Matrix)', fontsize=14, pad=20)
+
+    n_edges = np.sum(np.abs(W_np) > 1e-6)
+    plt.text(0.02, 0.98, f'Edges: {n_edges}', transform=plt.gca().transAxes,
+            verticalalignment='top', fontsize=12, bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
 
 def plot_temporal_predictions(model, t_values, true_expressions, device, save_path=None):

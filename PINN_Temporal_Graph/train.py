@@ -46,8 +46,7 @@ def Trainer(model: TemporalGraphPINN, eigengene_data, config, device):
             lambda_recon=config['loss_weights']['reconstruction'],
             lambda_physics=config['loss_weights']['physics'],
             lambda_tree=config['loss_weights']['tree'],
-            lambda_sign=config['loss_weights']['sign_consistency'],
-            lambda_sparsity=config['loss_weights']['sparsity']
+            lambda_sign=config['loss_weights']['negative']
         )
 
         total_loss.backward()
@@ -57,13 +56,15 @@ def Trainer(model: TemporalGraphPINN, eigengene_data, config, device):
         train_losses.append(total_loss.item())
         loss_components_history.append(loss_components)
 
+        # print(model.weight_net.W.grad)
         if (epoch + 1) % 10 == 0:
             tqdm.write(
                 f"Epoch {epoch+1:04d} | "
                 f"Loss={total_loss.item():.4f} | "
                 f"Recon={loss_components['reconstruction']:.4f} | "
                 f"Phys={loss_components['physics']:.4f} | "
-                f"Sparse={loss_components['sparsity']:.4f}"
+                f"Tree={loss_components['tree']:.4f} | "
+                f"Sign={loss_components['negative']:.4f}"
             )
 
         if config['experiment']['save_checkpoints'] and total_loss < best_loss:

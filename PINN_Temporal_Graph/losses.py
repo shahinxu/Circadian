@@ -75,30 +75,25 @@ def physics_loss(
 
     return F.mse_loss(dEdt_network, dEdt_graph)
 
-def tree_loss(A, alpha=1.0, beta=0.1):
+def tree_loss(A, alpha=1.0, beta=0.1, eps=1e-6):
     n = A.size(0)
-    A_sym = (A + A.t()) / 2
-    D = torch.diag(A_sym.sum(dim=1))
-    L = D - A_sym
+    device = A.device
 
-    n_edges = A_sym.sum() / 2
+    n_edges = A.sum()
     E_loss = (n_edges - (n - 1))**2
 
-    eigvals = torch.linalg.eigvalsh(L)
-    lambda2 = eigvals[1]
-    Connect_loss = torch.relu(-lambda2)**2
+    P = A / (A.sum(dim=0, keepdim=True) + eps)
+    I = torch.eye(n, device=device)
+    P_hat = P + I
+
+    reach = torch.matrix_power(P_hat, n)
+    Connect_loss = torch.relu(1.0 - reach[0,1:]).sum()
 
     return alpha * E_loss + beta * Connect_loss
 
 def negative_loss(W_sparse):
     negative_penalty = torch.clamp(-W_sparse, min=0).sum()
     return negative_penalty
-
-def sparsity_loss(T):    
-    n_edges = T.sum()    
-    sparsity_loss = n_edges
-    
-    return sparsity_loss
 
 def compute_loss(
     model: TemporalGraphPINN, 
@@ -107,8 +102,7 @@ def compute_loss(
     lambda_recon=1.0, 
     lambda_physics=1.0,
     lambda_tree=1.0, 
-    lambda_sign=1.0,
-    lambda_sparsity=0.01
+    lambda_sign=1.0
 ):
     T, _, W_sparse = model.get_graph_matrices()
     inferred_times = model.infer_node_times(W_sparse)
@@ -117,20 +111,17 @@ def compute_loss(
     loss_physics = physics_loss(model, eigengene_data, inferred_times, device)
     loss_tree = tree_loss(T)
     loss_sign = negative_loss(W_sparse)
-    loss_sparsity = sparsity_loss(T)
 
     total_loss = (
         lambda_recon * loss_recon +
         lambda_physics * loss_physics +
         lambda_tree * loss_tree +
-        lambda_sign * loss_sign +
-        lambda_sparsity * loss_sparsity
+        lambda_sign * loss_sign
     )
 
     return total_loss, {
         'reconstruction': loss_recon.item(),
         'physics': loss_physics.item(),
         'tree': loss_tree.item(),
-        'negative': loss_sign.item(),
-        'sparsity': loss_sparsity.item()
+        'negative': loss_sign.item()
     }

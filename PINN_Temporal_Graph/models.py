@@ -32,11 +32,12 @@ class TopologyNetwork(nn.Module):
 
         self.T = nn.Parameter(T_init + torch.randn(n_nodes, n_nodes) * 0.1)
 
-    def forward(self):
+    def forward(self, threshold=0.5):
         T_logits = self.T
-        T = torch.sigmoid(T_logits)
+        probs = torch.sigmoid(T_logits)
+        T_hard = (probs > threshold).float()
+        T = T_hard + (probs - probs.detach())
         T = T * (1 - torch.eye(T.shape[0], device=T.device))
-        T = (T > 0.01).float()
         return T
 
 class WeightNetwork(nn.Module):

@@ -8,7 +8,7 @@ model:
 
 # Training Parameters
 training:
-  n_epochs: 1000
+  n_epochs: 2000
   batch_size: 32  # Not used in unsupervised setting
   learning_rate: 0.001
   weight_decay: 0.00001
@@ -18,10 +18,10 @@ training:
 # Loss Weights
 loss_weights:
   reconstruction: 1.0      # MSE between predicted and true eigengenes
-  physics: 1.0            # Derivative consistency between network and graph
-  tree: 0.01              # Tree structure constraint (reduced for sparse graphs)
-  sign_consistency: 0.1    # Sign consistency along paths
-  sparsity: 0.1         # Sparsity constraint (further reduced to allow edges)
+  physics: 0.001           # Derivative consistency between network and graph
+  tree: 0.001              # Tree structure constraint (reduced for sparse graphs)
+  negative: 1    # Sign consistency along paths
+  sparsity: 0         # Sparsity constraint (further reduced to allow edges)
 
 # Data Parameters
 data:
