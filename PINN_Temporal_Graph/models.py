@@ -65,14 +65,11 @@ class TemporalGraphPINN(nn.Module):
         t_input = t_values.unsqueeze(-1)
         return self.omniscient_net(t_input)
 
-    def get_graph_matrices(self, sparsity_threshold=0.3):
+    def get_graph_matrices(self):
         T = self.topology_net()
         W = self.weight_net()
-
-        T_sparse = (T > sparsity_threshold).float()
-        W_sparse = T_sparse * W
-
-        return T_sparse, W, W_sparse
+        W_sparse = T * W
+        return T, W, W_sparse
 
     def infer_node_times_sparse(W_sparse, reference_node=0, max_iterations=10):
         n = W_sparse.shape[0]
