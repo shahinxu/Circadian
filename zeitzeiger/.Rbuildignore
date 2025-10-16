@@ -1,0 +1,9 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^README\.md$
+^testing\.R$
+^_pkgdown\.yml$
+^docs$
+^\.github$
+^cran-comments\.md$
+^lint_ignore\.csv$
