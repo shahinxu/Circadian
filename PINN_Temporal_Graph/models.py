@@ -35,8 +35,8 @@ class TopologyNetwork(nn.Module):
     def forward(self):
         T_logits = self.T
         T = torch.sigmoid(T_logits)
-        upper_mask = torch.triu(torch.ones_like(T), diagonal=1)
-        T = torch.where(upper_mask * (T > 0.01), T, torch.zeros_like(T))
+        T = T * (1 - torch.eye(T.shape[0], device=T.device))
+        T = (T > 0.01).float()
         return T
 
 class WeightNetwork(nn.Module):
@@ -47,12 +47,10 @@ class WeightNetwork(nn.Module):
     def forward(self):
         W = self.W
         W = W * (1 - torch.eye(W.shape[0], device=W.device))
-        upper_mask = torch.triu(torch.ones_like(W), diagonal=1)
-        W = torch.where(upper_mask * (W > 0.01), W, torch.zeros_like(W))
         return W
 
 class TemporalGraphPINN(nn.Module):
-    def __init__(self, n_nodes, node_dim, n_eigengenes=5):
+    def __init__(self, n_nodes, n_eigengenes=5):
         super().__init__()
         self.n_nodes = n_nodes
         self.n_eigengenes = n_eigengenes
@@ -71,7 +69,7 @@ class TemporalGraphPINN(nn.Module):
         W_sparse = T * W
         return T, W, W_sparse
 
-    def infer_node_times_sparse(W_sparse, reference_node=0, max_iterations=10):
+    def infer_node_times(self, W_sparse, reference_node=0, max_iterations=10):
         n = W_sparse.shape[0]
         device = W_sparse.device
 

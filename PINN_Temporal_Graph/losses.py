@@ -14,7 +14,7 @@ def reconstruction_loss(
     loss = F.mse_loss(predicted_expressions, eigengene_data)
     return loss
 
-def physics_constraint_loss(
+def physics_loss(
         model: TemporalGraphPINN,
         eigengene_data, 
         inferred_times, 
@@ -97,34 +97,36 @@ def sparsity_loss(T):
     return sparsity_loss
 
 def compute_loss(
-        model, 
-        eigengene_data, 
-        device,
-        lambda_recon=1.0, 
-        lambda_physics=1.0,
-        lambda_tree=1.0, 
-        lambda_sign=1.0,
-        lambda_sparsity=0.01
-    ):
+    model: TemporalGraphPINN, 
+    eigengene_data, 
+    device,
+    lambda_recon=1.0, 
+    lambda_physics=1.0,
+    lambda_tree=1.0, 
+    lambda_sign=1.0,
+    lambda_sparsity=0.01
+):
     T, _, W_sparse = model.get_graph_matrices()
     inferred_times = model.infer_node_times(W_sparse)
 
-    recon_loss = reconstruction_loss(model, eigengene_data, inferred_times, device)
-    physics_loss = physics_constraint_loss(model, eigengene_data, inferred_times, device)
-    tree_loss_val = tree_loss(T)
-    sign_loss = negative_loss(W_sparse)
-    sparse_loss = sparsity_loss(T)
+    loss_recon = reconstruction_loss(model, eigengene_data, inferred_times, device)
+    loss_physics = physics_loss(model, eigengene_data, inferred_times, device)
+    loss_tree = tree_loss(T)
+    loss_sign = negative_loss(W_sparse)
+    loss_sparsity = sparsity_loss(T)
 
-    total = (lambda_recon * recon_loss +
-             lambda_physics * physics_loss +
-             lambda_tree * tree_loss_val +
-             lambda_sign * sign_loss +
-             lambda_sparsity * sparse_loss)
+    total_loss = (
+        lambda_recon * loss_recon +
+        lambda_physics * loss_physics +
+        lambda_tree * loss_tree +
+        lambda_sign * loss_sign +
+        lambda_sparsity * loss_sparsity
+    )
 
-    return total, {
-        'reconstruction': recon_loss.item(),
-        'physics': physics_loss.item(),
-        'tree': tree_loss_val.item(),
-        'sign_consistency': sign_loss.item(),
-        'sparsity': sparse_loss.item()
+    return total_loss, {
+        'reconstruction': loss_recon.item(),
+        'physics': loss_physics.item(),
+        'tree': loss_tree.item(),
+        'negative': loss_sign.item(),
+        'sparsity': loss_sparsity.item()
     }

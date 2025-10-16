@@ -5,13 +5,18 @@ from tqdm import tqdm
 
 from models import TemporalGraphPINN
 from losses import compute_loss
-from utils import *
-from data import load_expression_data
+from utils import (
+    load_config, set_random_seed, create_experiment_dir,
+    save_checkpoint, early_stopping, plot_graph_structure
+)
+from dataset import load_expression_data
 
-def Trainer(model, eigengene_data, config, device):
-    optimizer = optim.Adam(model.parameters(),
-                          lr=config['training']['learning_rate'],
-                          weight_decay=config['training']['weight_decay'])
+def Trainer(model: TemporalGraphPINN, eigengene_data, config, device):
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=config['training']['learning_rate'],
+        weight_decay=config['training']['weight_decay']
+    )
 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
@@ -23,17 +28,17 @@ def Trainer(model, eigengene_data, config, device):
     train_losses = []
     loss_components_history = []
 
-    exp_dir = create_experiment_dir(config['experiment']['save_dir'],
-                                   config['experiment']['name'])
+    exp_dir = create_experiment_dir(
+        config['experiment']['save_dir'],
+        config['experiment']['name']
+    )
 
-    pbar = tqdm(range(config['training']['n_epochs']), 
-                desc="Training", 
-                unit="epoch",
-                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
+    n_epochs = config['training']['n_epochs']
+    patience = config['training']['patience']
+    min_delta = float(config['training']['min_delta'])
 
-    for epoch in pbar:
+    for epoch in tqdm(range(n_epochs), desc="Training", unit="epoch"):
         model.train()
-
         optimizer.zero_grad()
 
         total_loss, loss_components = compute_loss(
@@ -47,45 +52,46 @@ def Trainer(model, eigengene_data, config, device):
 
         total_loss.backward()
         optimizer.step()
-
         scheduler.step(total_loss.detach())
 
         train_losses.append(total_loss.item())
         loss_components_history.append(loss_components)
 
-        pbar.set_postfix({
-            'loss': f'{total_loss.item():.4f}',
-            'recon': f'{loss_components["reconstruction"]:.4f}',
-            'physics': f'{loss_components["physics"]:.4f}',
-            'sparsity': f'{loss_components["sparsity"]:.4f}'
-        })
+        if (epoch + 1) % 10 == 0:
+            tqdm.write(
+                f"Epoch {epoch+1:04d} | "
+                f"Loss={total_loss.item():.4f} | "
+                f"Recon={loss_components['reconstruction']:.4f} | "
+                f"Phys={loss_components['physics']:.4f} | "
+                f"Sparse={loss_components['sparsity']:.4f}"
+            )
 
         if config['experiment']['save_checkpoints'] and total_loss < best_loss:
             best_loss = total_loss
             save_checkpoint(model, optimizer, epoch, total_loss, exp_dir / 'best_model.pth')
 
-        if early_stopping(train_losses, config['training']['patience'], float(config['training']['min_delta'])):
-            pbar.set_description(f"Early stopping at epoch {epoch}")
+        if early_stopping(train_losses, patience, min_delta):
+            tqdm.write(f"Early stopping at epoch {epoch+1}")
             break
-
-    pbar.close()
 
     return train_losses, loss_components_history, exp_dir
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='config.yaml')
-    parser.add_argument('--data_path', type=str, default=None)
-    parser.add_argument('--device', type=str,
-                       default='cuda' if torch.cuda.is_available() else 'cpu')
-
     args = parser.parse_args()
 
     config = load_config(args.config)
-    device = torch.device(args.device)
 
-    if args.data_path:
-        eigengene_data, _ = load_expression_data(args.data_path)
+    device_str = config['system']['device']
+    if device_str == 'auto':
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    else:
+        device = torch.device(device_str)
+
+    data_path = config['system']['data_path']
+    if data_path:
+        eigengene_data, _ = load_expression_data(data_path)
         eigengene_data = torch.tensor(eigengene_data, dtype=torch.float32)
     else:
         from generate_data import generate_circadian_eigengenes

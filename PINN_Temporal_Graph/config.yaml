@@ -42,3 +42,8 @@ experiment:
   log_interval: 50
   save_checkpoints: true
   plot_results: true
+
+# System Settings
+system:
+  device: "auto"  # "auto", "cuda", or "cpu"
+  data_path: "data/synthetic_eigengenes_100x5.csv"  # Path to real data CSV, null for synthetic data

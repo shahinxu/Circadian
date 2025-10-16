@@ -111,8 +111,6 @@ def analyze_eigengene_properties(time_points, eigengenes):
     for i, ratio in enumerate(explained_variance_ratio):
         print(f"  Eigengene {i+1}: {ratio:.1%}")
 
-    from scipy import signal
-
     print("\nPeriodicity analysis (all eigengenes should have ~24h period):")
     for i in range(min(3, eigengenes.shape[1])):
         eigengene = eigengenes[:, i]
