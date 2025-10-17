@@ -30,7 +30,7 @@ class TopologyNetwork(nn.Module):
             dst = node_order[i + 1]
             T_init[src, dst] = 1.0
 
-        self.T = nn.Parameter(T_init + torch.randn(n_nodes, n_nodes) * 0.1)
+        self.T = nn.Parameter(T_init + torch.randn(n_nodes, n_nodes) * 0.001)
 
     def forward(self, threshold=0.5):
         T_logits = self.T
@@ -86,15 +86,15 @@ class TemporalGraphPINN(nn.Module):
         times.requires_grad_(True)
 
         probs = probs * (1 - torch.eye(n, device=device))
-
         for _ in range(max_iterations):
             t_i = times.unsqueeze(1).expand(-1, n)
             t_j_candidates = t_i + W_sparse
-            times_new = (probs * t_j_candidates).sum(dim=0)
+            weight_sum = probs.sum(dim=0).clamp_min(1e-6)
+            times_new = (probs * t_j_candidates).sum(dim=0) / weight_sum
 
             times_new[start] = 0.0
             if torch.allclose(times, times_new, atol=eps):
                 break
             times = times_new
-
+            # print(f"Inferred times: {times}")
         return times, probs

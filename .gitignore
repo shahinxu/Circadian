@@ -6,6 +6,7 @@
 *.tmp
 *.swp
 *.bak
+*.png
 
 .DS_Store
 Thumbs.db

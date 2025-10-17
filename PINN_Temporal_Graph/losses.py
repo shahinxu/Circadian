@@ -37,7 +37,6 @@ def physics_loss(
             retain_graph=True
         )[0]
         dEdt_list.append(grad_i)
-
     dEdt_network = torch.stack(dEdt_list, dim=1)
 
     N, D = eigengene_data.shape
@@ -49,16 +48,19 @@ def physics_loss(
     time_diff = t_j - t_i
     feature_diff = E_j - E_i
 
-    probs_safe = probs.unsqueeze(-1)
+    T, _, _ = model.get_graph_matrices()
+    edge_mask = T > 1e-6
+    probs_safe = probs * edge_mask.float()
+    probs_safe = probs_safe.unsqueeze(-1)
     safe_time_diff = torch.where(
-        time_diff.abs() < 1e-6, 
+        (time_diff.abs() < 1e-6) | (~edge_mask), 
         torch.ones_like(time_diff), 
         time_diff
-    )
-    weighted_derivatives = (feature_diff / safe_time_diff.unsqueeze(-1)) * probs_safe
-
-    neighbor_weight_sum = probs_safe.sum(dim=1).clamp_min(1e-6)  # [N,1]
-    dEdt_graph = weighted_derivatives.sum(dim=1) / neighbor_weight_sum  # [N,D]
+    ).unsqueeze(-1)
+    
+    weighted_derivatives = (feature_diff / safe_time_diff) * probs_safe
+    neighbor_weight_sum = probs_safe.sum(dim=1).clamp_min(1e-6)
+    dEdt_graph = weighted_derivatives.sum(dim=1) / neighbor_weight_sum
 
     return F.mse_loss(dEdt_network, dEdt_graph)
 
