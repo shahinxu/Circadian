@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import math
+
 
 class OmniscientNetwork(nn.Module):
     def __init__(self, input_dim, hidden_dim=128, n_eigengenes=5):
@@ -38,7 +38,7 @@ class TopologyNetwork(nn.Module):
         T_hard = (probs > threshold).float()
         T = T_hard + (probs - probs.detach())
         T = T * (1 - torch.eye(T.shape[0], device=T.device))
-        return T
+        return T, probs
 
 class WeightNetwork(nn.Module):
     def __init__(self, n_nodes):
@@ -61,46 +61,40 @@ class TemporalGraphPINN(nn.Module):
         self.weight_net = WeightNetwork(n_nodes)
 
     def forward(self, t_values):
-        t_input = t_values.unsqueeze(-1)
-        return self.omniscient_net(t_input)
-
+        if t_values.dim() == 1:
+            t_values = t_values.unsqueeze(-1)
+        return self.omniscient_net(t_values)
+    
     def get_graph_matrices(self):
-        T = self.topology_net()
+        T, _ = self.topology_net()
         W = self.weight_net()
         W_sparse = T * W
         return T, W, W_sparse
 
-    def infer_node_times(self, W_sparse, reference_node=0, max_iterations=10):
+    def infer_node_times(
+            self, 
+            W_sparse, 
+            reference_node=0, 
+            max_iterations=50, 
+            eps=1e-6
+        ):
+        _, probs = self.topology_net()
         n = W_sparse.shape[0]
         device = W_sparse.device
+        start = reference_node
+        times = torch.zeros(n, device=device)
+        times.requires_grad_(True)
 
-        times = torch.full((n,), float('inf'), device=device)
-        times[reference_node] = 0.0
-
-        edge_mask = (W_sparse.abs() > 1e-6)
-        rows, cols = edge_mask.nonzero(as_tuple=True)
-        weights = W_sparse[rows, cols]
+        probs = probs * (1 - torch.eye(n, device=device))
 
         for _ in range(max_iterations):
-            updated_times = times.clone()
+            t_i = times.unsqueeze(1).expand(-1, n)
+            t_j_candidates = t_i + W_sparse
+            times_new = (probs * t_j_candidates).sum(dim=0)
 
-            candidate_times = times[rows] + weights
-            updated_times = torch.scatter_reduce(
-                updated_times, 0, cols, candidate_times, reduce='amin'
-            )
-
-            if torch.allclose(times, updated_times, atol=1e-6):
+            times_new[start] = 0.0
+            if torch.allclose(times, times_new, atol=eps):
                 break
+            times = times_new
 
-            times = updated_times
-
-        inf_mask = torch.isinf(times)
-        if inf_mask.any():
-            degrees = edge_mask.sum(dim=0).float()
-            if degrees.std() > 1e-6:
-                default_times = (degrees - degrees.mean()) / degrees.std()
-            else:
-                default_times = torch.zeros_like(degrees)
-            times = torch.where(inf_mask, default_times, times)
-
-        return times
+        return times, probs

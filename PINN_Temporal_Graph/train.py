@@ -7,7 +7,8 @@ from models import TemporalGraphPINN
 from losses import compute_loss
 from utils import (
     load_config, set_random_seed, create_experiment_dir,
-    save_checkpoint, early_stopping, plot_graph_structure
+    save_checkpoint, early_stopping, plot_graph_structure,
+    plot_inferred_expressions
 )
 from data import load_expression_data
 
@@ -116,11 +117,13 @@ def main():
     )
 
     _, _, W_sparse = model.get_graph_matrices()
-    inferred_times = model.infer_node_times(W_sparse)
+    inferred_times, _ = model.infer_node_times(W_sparse)
 
     model.eval()
 
     plot_graph_structure(W_sparse, save_path=exp_dir / 'final_graph.png')
+    plot_inferred_expressions(model, inferred_times, eigengene_data, device,
+                             save_path=exp_dir / 'inferred_expressions.png')
 
 if __name__ == "__main__":
     main()

@@ -182,6 +182,72 @@ def plot_temporal_predictions(model, t_values, true_expressions, device, save_pa
         plt.savefig(save_path)
     plt.show()
 
+def plot_inferred_expressions(model, inferred_times, eigengene_data, device, save_path=None):
+    """
+    Plot eigengene expressions at inferred time points
+    """
+    model.eval()
+
+    # Ensure all tensors are on the same device
+    inferred_times = inferred_times.to(device)
+    eigengene_data = eigengene_data.to(device)
+
+    # Sort by inferred times for better visualization
+    sorted_indices = torch.argsort(inferred_times)
+    sorted_times = inferred_times[sorted_indices]
+    sorted_expressions = eigengene_data[sorted_indices]
+
+    # Generate predictions at inferred times
+    with torch.no_grad():
+        predicted_expressions = model(sorted_times.unsqueeze(-1).to(device)).cpu().detach()
+
+    # Move back to CPU for plotting
+    sorted_times = sorted_times.cpu().detach()
+    sorted_expressions = sorted_expressions.cpu().detach()
+
+    n_eigengenes = min(8, eigengene_data.shape[1])
+    n_cols = 4
+    n_rows = (n_eigengenes + n_cols - 1) // n_cols
+
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
+    if n_rows == 1:
+        axes = axes.reshape(1, -1)
+    axes = axes.flatten()
+
+    for i in range(n_eigengenes):
+        ax = axes[i]
+
+        # Plot true expressions at inferred times
+        ax.scatter(sorted_times.numpy(), sorted_expressions[:, i].numpy(),
+                  c='blue', alpha=0.7, s=50, label='True expression')
+
+        # Plot model predictions at inferred times
+        ax.scatter(sorted_times.numpy(), predicted_expressions[:, i].numpy(),
+                  c='red', alpha=0.7, s=30, marker='x', label='Model prediction')
+
+        # Add trend lines
+        ax.plot(sorted_times.numpy(), sorted_expressions[:, i].numpy(),
+               'b-', alpha=0.3, linewidth=1)
+        ax.plot(sorted_times.numpy(), predicted_expressions[:, i].numpy(),
+               'r--', alpha=0.5, linewidth=1)
+
+        ax.set_xlabel('Inferred Time (hours)')
+        ax.set_ylabel(f'Eigengene {i+1} Expression')
+        ax.set_title(f'Eigengene {i+1}')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+    # Hide unused subplots
+    for i in range(n_eigengenes, len(axes)):
+        axes[i].set_visible(False)
+
+    plt.suptitle('Eigengene Expressions at Inferred Time Points', fontsize=16, y=0.98)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+
 def analyze_graph_properties(T, W_sparse):
     properties = {}
 

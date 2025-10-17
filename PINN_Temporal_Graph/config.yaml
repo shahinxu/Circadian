@@ -18,10 +18,9 @@ training:
 # Loss Weights
 loss_weights:
   reconstruction: 1.0      # MSE between predicted and true eigengenes
-  physics: 0.001           # Derivative consistency between network and graph
-  tree: 0.001              # Tree structure constraint (reduced for sparse graphs)
+  physics: 0.01           # Derivative consistency between network and graph
+  tree: 0.01              # Tree structure constraint (reduced for sparse graphs)
   negative: 1    # Sign consistency along paths
-  sparsity: 0         # Sparsity constraint (further reduced to allow edges)
 
 # Data Parameters
 data:

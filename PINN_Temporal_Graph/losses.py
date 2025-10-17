@@ -18,6 +18,7 @@ def physics_loss(
         model: TemporalGraphPINN,
         eigengene_data, 
         inferred_times, 
+        probs,
         device
     ):
     eigengene_data = eigengene_data.to(device)
@@ -39,9 +40,6 @@ def physics_loss(
 
     dEdt_network = torch.stack(dEdt_list, dim=1)
 
-    _, _, W_sparse = model.get_graph_matrices()
-    edge_mask = (W_sparse.abs() > 1e-6)
-
     N, D = eigengene_data.shape
     E_i = eigengene_data.unsqueeze(1).expand(-1, N, -1)
     E_j = eigengene_data.unsqueeze(0).expand(N, -1, -1)
@@ -51,27 +49,16 @@ def physics_loss(
     time_diff = t_j - t_i
     feature_diff = E_j - E_i
 
+    probs_safe = probs.unsqueeze(-1)
     safe_time_diff = torch.where(
         time_diff.abs() < 1e-6, 
         torch.ones_like(time_diff), 
         time_diff
     )
+    weighted_derivatives = (feature_diff / safe_time_diff.unsqueeze(-1)) * probs_safe
 
-    graph_derivatives = torch.where(
-        edge_mask.unsqueeze(-1),
-        feature_diff / safe_time_diff.unsqueeze(-1),
-        torch.zeros_like(feature_diff)
-    )
-
-    neighbor_count = edge_mask.sum(dim=1).clamp_min(1).unsqueeze(-1)
-    dEdt_graph = graph_derivatives.sum(dim=1) / neighbor_count
-
-    has_neighbors = (neighbor_count.squeeze(-1) > 0).unsqueeze(-1)
-    dEdt_graph = torch.where(
-        has_neighbors,
-        dEdt_graph,
-        dEdt_network.detach()
-    )
+    neighbor_weight_sum = probs_safe.sum(dim=1).clamp_min(1e-6)  # [N,1]
+    dEdt_graph = weighted_derivatives.sum(dim=1) / neighbor_weight_sum  # [N,D]
 
     return F.mse_loss(dEdt_network, dEdt_graph)
 
@@ -105,10 +92,10 @@ def compute_loss(
     lambda_sign=1.0
 ):
     T, _, W_sparse = model.get_graph_matrices()
-    inferred_times = model.infer_node_times(W_sparse)
+    inferred_times, probs = model.infer_node_times(W_sparse)
 
     loss_recon = reconstruction_loss(model, eigengene_data, inferred_times, device)
-    loss_physics = physics_loss(model, eigengene_data, inferred_times, device)
+    loss_physics = physics_loss(model, eigengene_data, inferred_times, probs, device)
     loss_tree = tree_loss(T)
     loss_sign = negative_loss(W_sparse)
 
