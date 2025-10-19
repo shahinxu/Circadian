@@ -196,11 +196,11 @@ def train_model(
 def main():
 
 
-    parser = argparse.ArgumentParser(description="训练相位自编码器模型（两阶段greedy排序+对齐loss）")
-    parser.add_argument("--dataset_path", required=True, help="如 GSE108539/Exon")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset_path", required=True)
     parser.add_argument("--n_components", type=int, default=5)
     parser.add_argument("--num_epochs", type=int, default=2000)
-    parser.add_argument("--stage1_frac", type=float, default=1, help="第一阶段训练占总epoch比例")
+    parser.add_argument("--stage1_frac", type=float, default=1)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--lambda_recon", type=float, default=0.001)
     parser.add_argument("--lambda_align", type=float, default=2.0)
