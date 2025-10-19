@@ -12,6 +12,25 @@ def set_random_seed(seed=42):
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
+def greedy_ordering(components: np.ndarray):
+    n, d = components.shape
+    visited = np.zeros(n, dtype=bool)
+    order = []
+    start = np.argmin(np.sum(np.abs(components), axis=1))
+    cur = start
+    order.append(cur)
+    visited[cur] = True
+    for _ in range(n - 1):
+        # compute L1 distances to unvisited
+        diffs = np.abs(components - components[cur:cur+1, :])
+        dists = np.sum(diffs, axis=1)
+        dists[visited] = np.inf
+        nxt = np.argmin(dists)
+        order.append(nxt)
+        visited[nxt] = True
+        cur = nxt
+    return np.array(order, dtype=int)
+
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -248,24 +267,57 @@ def plot_inferred_expressions(model, inferred_times, eigengene_data, device, sav
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
 
-def analyze_graph_properties(T, W_sparse):
-    properties = {}
+def plot_time_comparison(inferred_times, true_times, save_path=None):
+    """
+    Plot comparison between inferred times and true times
+    """
+    if true_times is None:
+        print("No true times available for comparison (using real data)")
+        return
 
-    n_edges = (T > 0.5).sum().item()
-    n_possible_edges = T.numel() - T.shape[0]
-    properties['sparsity'] = n_edges / n_possible_edges
+    # Ensure tensors are on CPU and detached
+    inferred_times = inferred_times.cpu().detach().numpy()
+    true_times = true_times.cpu().detach().numpy()
 
-    edge_weights = W_sparse[W_sparse.abs() > 1e-6]
-    if len(edge_weights) > 0:
-        properties['mean_weight'] = edge_weights.mean().item()
-        properties['std_weight'] = edge_weights.std().item()
-        properties['max_weight'] = edge_weights.abs().max().item()
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
 
-    degree = (T > 0.5).sum(dim=1)
-    properties['mean_degree'] = degree.float().mean().item()
-    properties['max_degree'] = degree.max().item()
+    # Scatter plot: inferred vs true times
+    ax1.scatter(true_times, inferred_times, alpha=0.7, s=50, c='blue', edgecolors='black')
+    ax1.plot([true_times.min(), true_times.max()], [true_times.min(), true_times.max()],
+             'r--', linewidth=2, label='Perfect match')
+    ax1.set_xlabel('True Time (hours)')
+    ax1.set_ylabel('Inferred Time (hours)')
+    ax1.set_title('Inferred vs True Times')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
 
-    return properties
+    # Error distribution
+    time_errors = inferred_times - true_times
+    ax2.hist(time_errors, bins=20, alpha=0.7, color='green', edgecolor='black')
+    ax2.axvline(x=0, color='red', linestyle='--', linewidth=2, label='Zero error')
+    ax2.set_xlabel('Time Error (hours)')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title('Time Inference Error Distribution')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    plt.suptitle('Time Inference Quality Assessment', fontsize=16, y=0.98)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+
+    # Print statistics
+    mse = np.mean(time_errors ** 2)
+    mae = np.mean(np.abs(time_errors))
+    max_error = np.max(np.abs(time_errors))
+
+    print("\nTime Inference Statistics:")
+    print(f"  MSE: {mse:.4f} hours²")
+    print(f"  MAE: {mae:.4f} hours")
+    print(f"  Max Error: {max_error:.4f} hours")
+    print(f"  Correlation: {np.corrcoef(true_times, inferred_times)[0,1]:.4f}")
 
 def save_config(config, filepath):
     with open(filepath, 'w') as f:

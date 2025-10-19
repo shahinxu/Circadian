@@ -8,7 +8,7 @@ from losses import compute_loss
 from utils import (
     load_config, set_random_seed, create_experiment_dir,
     save_checkpoint, early_stopping, plot_graph_structure,
-    plot_inferred_expressions
+    plot_inferred_expressions, plot_time_comparison
 )
 from data import load_expression_data
 
@@ -95,13 +95,16 @@ def main():
     if data_path:
         eigengene_data, _ = load_expression_data(data_path)
         eigengene_data = torch.tensor(eigengene_data, dtype=torch.float32)
+        # For real data, we don't have ground truth times
+        true_times = None
     else:
         from generate_data import generate_circadian_eigengenes
-        _, eigengene_data = generate_circadian_eigengenes(
+        true_times, eigengene_data = generate_circadian_eigengenes(
             n_samples=config['data']['n_samples'],
             n_eigengenes=config['model']['n_eigengenes']
         )
         eigengene_data = torch.tensor(eigengene_data, dtype=torch.float32)
+        true_times = torch.tensor(true_times, dtype=torch.float32)
 
     n_samples, n_eigengenes = eigengene_data.shape
 
@@ -124,6 +127,7 @@ def main():
     plot_graph_structure(W_sparse, save_path=exp_dir / 'final_graph.png')
     plot_inferred_expressions(model, inferred_times, eigengene_data, device,
                              save_path=exp_dir / 'inferred_expressions.png')
+    plot_time_comparison(inferred_times, true_times, save_path=exp_dir / 'time_comparison.png')
 
 if __name__ == "__main__":
     main()

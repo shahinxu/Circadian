@@ -64,7 +64,7 @@ def physics_loss(
 
     return F.mse_loss(dEdt_network, dEdt_graph)
 
-def tree_loss(A, alpha=1.0, beta=0.1, eps=1e-6):
+def tree_loss(A, alpha=1.0, beta=0.1, gamma=1.0, eps=1e-6):
     n = A.size(0)
     device = A.device
 
@@ -74,11 +74,12 @@ def tree_loss(A, alpha=1.0, beta=0.1, eps=1e-6):
     P = A / (A.sum(dim=0, keepdim=True) + eps)
     I = torch.eye(n, device=device)
     P_hat = P + I
-
     reach = torch.matrix_power(P_hat, n)
     Connect_loss = torch.relu(1.0 - reach[0,1:]).sum()
 
-    return alpha * E_loss + beta * Connect_loss
+    Sym_loss = (A * A.T).sum()
+
+    return alpha * E_loss + beta * Connect_loss + gamma * Sym_loss
 
 def negative_loss(W_sparse):
     negative_penalty = torch.clamp(-W_sparse, min=0).sum()

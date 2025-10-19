@@ -10,7 +10,7 @@ model:
 training:
   n_epochs: 2000
   batch_size: 32  # Not used in unsupervised setting
-  learning_rate: 0.001
+  learning_rate: 0.0001
   weight_decay: 0.00001
   patience: 50
   min_delta: 1e-4
@@ -19,12 +19,12 @@ training:
 loss_weights:
   reconstruction: 1.0      # MSE between predicted and true eigengenes
   physics: 0.01           # Derivative consistency between network and graph
-  tree: 0.01              # Tree structure constraint (reduced for sparse graphs)
-  negative: 1    # Sign consistency along paths
+  tree: 0.1              # Tree structure constraint (reduced for sparse graphs)
+  negative: 10    # Sign consistency along paths
 
 # Data Parameters
 data:
-  n_samples: 20
+  n_samples: 40
   noise_level: 0.02
   period: 24.0
 

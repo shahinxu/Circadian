@@ -20,7 +20,7 @@ class OmniscientNetwork(nn.Module):
         return self.net(t)
 
 class TopologyNetwork(nn.Module):
-    def __init__(self, n_nodes):
+    def __init__(self, n_nodes, eigengene_data=None):
         super().__init__()
         T_init = torch.zeros(n_nodes, n_nodes)
 
@@ -41,7 +41,7 @@ class TopologyNetwork(nn.Module):
         return T, probs
 
 class WeightNetwork(nn.Module):
-    def __init__(self, n_nodes):
+    def __init__(self, n_nodes, eigengene_data=None):
         super().__init__()
         self.W = nn.Parameter(torch.randn(n_nodes, n_nodes) * 0.1)
 

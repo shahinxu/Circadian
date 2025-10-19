@@ -44,27 +44,23 @@ def load_and_preprocess_train_data(train_file, n_components=50, blunt_percent=0.
     sample_columns = [col for col in df.columns if col != 'Gene_Symbol']
     gene_df = df[~df['Gene_Symbol'].isin(['celltype_D', 'time_C'])].copy()
     expression_data = gene_df[sample_columns].values.T  # (samples, genes)
-    # 1. Outlier truncation
     expression_data = blunt_percentile(expression_data, percent=blunt_percent)
-    # 2. Gene filtering (CV and mean)
     gene_means = np.mean(expression_data, axis=0)
     gene_stds = np.std(expression_data, axis=0)
     gene_cvs = gene_stds / (gene_means + 1e-8)
     mean_rank = np.argsort(-gene_means)  # descending
     keep = (gene_cvs > min_cv) & (gene_cvs < max_cv) & (mean_rank < min_mean_rank)
     expression_data = expression_data[:, keep]
-    # 3. Mean normalization
     if do_mean_normalize:
         expression_data = mean_normalize(expression_data)
-    # 4. Standardization
     scaler = StandardScaler()
     expression_scaled = scaler.fit_transform(expression_data)
-    # 5. PCA
     pca_components, pca_model, explained_variance = create_eigengenes(expression_scaled, n_components)
     train_dataset = ExpressionDataset(pca_components)
     preprocessing_info = {
         'scaler': scaler,
         'pca_model': pca_model,
+        'sample_columns': sample_columns,
         'explained_variance': explained_variance,
         'n_genes': expression_scaled.shape[1],
         'n_samples': expression_scaled.shape[0],

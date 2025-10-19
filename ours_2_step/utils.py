@@ -390,15 +390,14 @@ def plot_phase_vs_metadata_comparison(pred_csv: str, celltype: str, meta: pd.Dat
 
         aligned, r, r2, spearman_R, best_shift, flipped = best_align_phase_for_comparison(phase_hours, metadata_hours, step=0.1)
 
-        plt.figure(figsize=(7.5, 5.5))
-        plt.scatter(aligned, metadata_hours, s=28, alpha=0.85, edgecolors='white', linewidths=0.4, color='tab:blue')
-        plt.xlabel('Predicted Phase (Hours)', fontsize=16)
-        plt.ylabel('Collection Time (Hours)', fontsize=16)
+        plt.figure(figsize=(8, 7))
+        plt.scatter(aligned, metadata_hours)
+        plt.xlabel('Predicted Time', fontsize=24)
+        plt.ylabel('Collection Time', fontsize=24)
 
         subtitle = f'Shift={best_shift:.2f}h'
         if flipped:
             subtitle += ' (flipped)'
-        plt.title(f'{celltype} Phase vs Metadata\n{subtitle}', fontsize=14)
 
         plt.grid(True, alpha=0.3, linestyle='--')
         plt.tight_layout()
@@ -406,7 +405,7 @@ def plot_phase_vs_metadata_comparison(pred_csv: str, celltype: str, meta: pd.Dat
         os.makedirs(out_dir, exist_ok=True)
         safe_ct = sanitize_filename(celltype)
         out_path = os.path.join(out_dir, f'phase_vs_time_{safe_ct}.png')
-        plt.savefig(out_path, dpi=300, bbox_inches='tight')
+        plt.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close()
         print(f'Saved: {out_path}')
         return out_path, r, r2, spearman_R
@@ -416,135 +415,28 @@ def plot_phase_vs_metadata_comparison(pred_csv: str, celltype: str, meta: pd.Dat
         return None
 
 
-def generate_phase_metadata_comparison(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
-    print(f"\n=== 生成 Phase vs Metadata 对比图 ===")
+def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     print(f"Results DataFrame shape: {results_df.shape}")
     print(f"Results DataFrame columns: {list(results_df.columns)}")
-    
-    try:
-        meta = load_metadata_for_phase_comparison(metadata_csv)
-        print(f"Metadata shape: {meta.shape}")
-        print(f"Metadata columns: {list(meta.columns)}")
-        out_dir = os.path.join(save_dir, 'phase_vs_metadata')
-        os.makedirs(out_dir, exist_ok=True)
+    meta = load_metadata_for_phase_comparison(metadata_csv)
 
-        metrics_rows = []
-        
-        # 检查是否有 Cell_Type 列（多细胞类型情况）
-        if 'Cell_Type' in results_df.columns:
-            print("检测到多细胞类型数据，按细胞类型分别处理")
-            celltypes = pd.unique(results_df['Cell_Type'].dropna())
-            print(f"发现 {len(celltypes)} 个细胞类型: {list(celltypes)}")
-            
-            # 生成整体图（使用临时文件以复用比较函数，并在完成后删除）
-            try:
-                tmp_all = os.path.join(out_dir, 'preds_ALL.tmp.csv')
-                results_df[['Sample_ID', 'Predicted_Phase_Hours']].to_csv(tmp_all, index=False)
-                print(f"处理整体数据(临时): {tmp_all}")
-                result = plot_phase_vs_metadata_comparison(tmp_all, 'ALL', meta, out_dir)
-                if result:
-                    _, r, r2, spearman_R = result
-                    print(f"整体 phase-vs-metadata 图已生成: R={r:.3f}, R²={r2:.3f}, Spearman ρ={spearman_R:.3f}")
-                if os.path.isfile(tmp_all):
-                    os.remove(tmp_all)
-            except Exception as e:
-                print(f"[WARN] 为整体生成 phase-vs-metadata 图失败: {e}")
-            
-            # 为每个细胞类型生成图
-            for ct in celltypes:
-                try:
-                    print(f"处理细胞类型: {ct}")
-                    safe_name = sanitize_filename(ct)
-                    tmp_path = os.path.join(out_dir, f'preds_{safe_name}.csv')
-                    subset = results_df[results_df['Cell_Type'] == ct][['Sample_ID', 'Predicted_Phase_Hours']].copy()
-                    print(f"  细胞类型 {ct} 样本数: {len(subset)}")
-                    subset.to_csv(tmp_path, index=False)
-                    
-                    result = plot_phase_vs_metadata_comparison(tmp_path, ct, meta, out_dir)
-                    if result is not None:
-                        _, r, r2, spearman_R = result
-                        metrics_rows.append({'celltype': ct, 'R_spuare': r2, 'Pearson_R': r, 'Spearman_R': spearman_R})
-                        print(f"  {ct}: R={r:.3f}, R²={r2:.3f}, Spearman ρ={spearman_R:.3f}")
-                    else:
-                        print(f"  {ct}: 匹配失败")
-                        
-                    # 清理临时文件
-                    if os.path.isfile(tmp_path):
-                        os.remove(tmp_path)
-                        
-                except Exception as e:
-                    print(f"[ERROR] 为 celltype={ct} 生成图失败: {e}")
-                    
-        else:
-            print("未检测到 Cell_Type 列，作为单一数据集处理")
-            
-            celltype_name = 'ALL'
-            try:
-                save_dir_parts = os.path.normpath(save_dir).split(os.sep)
-                if len(save_dir_parts) >= 2:
-                    potential_celltype = save_dir_parts[-2]
-                    if potential_celltype not in ['result', 'results', 'output', 'data', 'phase_vs_metadata']:
-                        celltype_name = potential_celltype
-                        print(f"从路径推断细胞类型: {celltype_name}")
-            except Exception:
-                pass
-            
-            # 为整个数据集生成图和 metrics（使用临时文件，不保留）
-            try:
-                tmp_all = os.path.join(out_dir, f'preds_{sanitize_filename(celltype_name)}.tmp.csv')
-                results_df[['Sample_ID', 'Predicted_Phase_Hours']].to_csv(tmp_all, index=False)
-                print(f"处理数据(临时): {tmp_all} (作为 {celltype_name})")
-                result = plot_phase_vs_metadata_comparison(tmp_all, celltype_name, meta, out_dir)
-                if result is not None:
-                    _, r, r2, spearman_R = result
-                    metrics_rows.append({'celltype': celltype_name, 'R_spuare': r2, 'Pearson_R': r, 'Spearman_R': spearman_R})
-                    print(f"{celltype_name}: R={r:.3f}, R²={r2:.3f}, Spearman ρ={spearman_R:.3f}")
-                else:
-                    print(f"{celltype_name}: 匹配失败")
-                # 清理临时文件
-                if os.path.isfile(tmp_all):
-                    os.remove(tmp_all)
-            except Exception as e:
-                print(f"[ERROR] 为 {celltype_name} 生成图失败: {e}")
-                import traceback
-                traceback.print_exc()
+    out_dir = os.path.join(save_dir, 'phase_vs_metadata')
+    os.makedirs(out_dir, exist_ok=True)
 
-        # 保存 metrics.csv
-        print(f"准备保存 metrics，行数: {len(metrics_rows)}")
-        if metrics_rows:
-            try:
-                metrics_df = pd.DataFrame(metrics_rows)
-                metrics_path = os.path.join(out_dir, 'metrics.csv')
-                metrics_df.to_csv(metrics_path, index=False)
-                print(f"Metrics 表保存到: {metrics_path}")
-                
-                # 验证文件是否真的保存了
-                if os.path.isfile(metrics_path):
-                    saved_df = pd.read_csv(metrics_path)
-                    print(f"验证: metrics.csv 已保存，包含 {len(saved_df)} 行")
-                    print("内容预览:")
-                    print(saved_df.to_string())
-                else:
-                    print("错误: metrics.csv 文件未成功保存")
-                
-                # 打印简要统计
-                print(f"各细胞类型统计:")
-                for _, row in metrics_df.iterrows():
-                    print(f"  {row['celltype']}: R={row['Pearson_R']:.3f}, R²={row['R_spuare']:.3f}, Spearman ρ={row['Spearman_R']:.3f}")
-                    
-            except Exception as e:
-                print(f"[ERROR] 保存 metrics.csv 失败: {e}")
-                import traceback
-                traceback.print_exc()
-        else:
-            print("警告: 没有 metrics 数据可保存")
-            print("可能的原因:")
-            print("1. 预测数据与 metadata 无法匹配")
-            print("2. 数据格式问题或列缺失 (需要 Sample_ID 与 Predicted_Phase_Hours)")
+    # Prepare a temporary CSV with the required columns
+    tmp_all = os.path.join(out_dir, 'preds_ALL.tmp.csv')
+    sub = results_df[['Sample_ID', 'Predicted_Phase_Hours']].copy()
+    sub.to_csv(tmp_all, index=False)
+    print(f"生成临时预测文件: {tmp_all}")
 
-        print(f"Phase-vs-metadata 输出保存在: {out_dir}")
-        
-    except Exception as e:
-        print(f"[ERROR] 生成 phase-metadata 对比时出错: {e}")
-        import traceback
-        traceback.print_exc()
+    result = plot_phase_vs_metadata_comparison(tmp_all, 'ALL', meta, out_dir)
+    if result is not None:
+        _, r, r2, spearman_R = result
+        print(f"整体 phase-vs-metadata 图已生成: R={r:.3f}, R²={r2:.3f}, Spearman ρ={spearman_R:.3f}")
+    else:
+        print("[WARN] 无法生成 phase-vs-metadata 图（可能没有匹配）")
+
+    if os.path.isfile(tmp_all):
+        os.remove(tmp_all)
+
+    print(f"Phase-vs-metadata 输出保存在: {out_dir}")

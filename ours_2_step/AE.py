@@ -59,9 +59,12 @@ class PhaseAutoEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
     
     def forward(self, x, celltype_indices=None):
+        # encode -> normalized 2D coordinates on unit circle
         phase_coords_normalized = self.encode(x, celltype_indices)
+        # compute scalar phase angle for external use
         phase_angles = coords_to_phase(phase_coords_normalized)
-        reconstructed = self.decode(phase_angles)
+        # pass 2D coords into decoder (decoder now accepts either 1D angles or 2D coords)
+        reconstructed = self.decode(phase_coords_normalized)
         return phase_coords_normalized, phase_angles, reconstructed
     
     def encode(self, x, celltype_indices=None):
@@ -80,20 +83,19 @@ class PhaseAutoEncoder(nn.Module):
         return phase_coords_normalized
     
     def decode(self, phase_angles):
-        if phase_angles.dim() == 1:
-            phase = phase_angles.unsqueeze(1)
-        else:
-            phase = phase_angles
+        x = phase_angles[:, 0:1]
+        y = phase_angles[:, 1:2]
+        phase = torch.atan2(y, x)
+        two_pi = 2 * math.pi
+        phase = torch.where(phase < 0, phase + two_pi, phase)
 
         if getattr(self, 'fourier_K', 0) > 0:
-            # build [sin(k*phase), cos(k*phase)] features
             K = self.fourier_K
             harmonics = []
             for k in range(1, K + 1):
                 harmonics.append(torch.sin(k * phase))
                 harmonics.append(torch.cos(k * phase))
             phase_input = torch.cat(harmonics, dim=1)
-            # If any extra dims expected/truncated, decoder init matched in_features to 2*K
         else:
             phase_input = phase
 

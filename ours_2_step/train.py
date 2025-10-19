@@ -1,4 +1,4 @@
-from utils import generate_phase_metadata_comparison
+from utils import plot_comparsion
 import argparse
 import os
 import numpy as np
@@ -235,7 +235,7 @@ def main():
         dropout=args.dropout
     )
 
-    model, order = train_model(
+    model, pred_order = train_model(
         model,
         train_dataset=train_dataset,
         preprocessing_info=preprocessing_info,
@@ -249,17 +249,20 @@ def main():
     )
 
     if os.path.isfile(metadata):
-        n_samples = len(order)
-        print(n_samples)
-        predicted_phase_hours = (np.arange(n_samples) / n_samples) * args.period_hours
+        n_samples = len(pred_order)
+        pred_hours = (np.arange(n_samples) / n_samples) * args.period_hours
         sample_names = preprocessing_info.get('sample_columns', [])
+        print(len(sample_names))
+        print(len(pred_order))
+        print(len(pred_hours))
         order_df = pd.DataFrame({
             'Sample_ID': sample_names,
-            'Predicted_Order': order,
-            'Predicted_Phase_Hours': predicted_phase_hours
+            'Predicted_Order': pred_order,
+            'Predicted_Phase_Hours': pred_hours
         })
+        
         order_df.to_csv(os.path.join(save_dir, 'greedy_order.csv'), index=False)
-        generate_phase_metadata_comparison(order_df, metadata, save_greedy)
+        plot_comparsion(order_df, metadata, save_greedy)
 
     # 测试集推理
     if os.path.isfile(test_file):
@@ -277,7 +280,7 @@ def main():
         )
 
         if os.path.isfile(metadata):
-            generate_phase_metadata_comparison(results_df, metadata, save_dir)
+            plot_comparsion(results_df, metadata, save_dir)
     else:
         print("Training completed. No test file provided, so no predictions made.")
 
