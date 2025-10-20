@@ -25,13 +25,7 @@ def _run_inference(model, test_loader, celltype_to_idx, device):
             expressions = batch['expression'].to(device)
             times = batch.get('time', None)
             celltypes = batch.get('celltype', None)
-
-            celltype_indices = None
-            if celltypes is not None and celltype_to_idx:
-                batch_celltype_indices = [celltype_to_idx.get(ct, 0) for ct in celltypes]
-                celltype_indices = torch.tensor(batch_celltype_indices, device=device)
-
-            phase_coords, phase_angles, _ = model(expressions, celltype_indices)
+            phase_coords, phase_angles, _ = model(expressions)
 
             all_phase_coords.append(phase_coords.cpu().numpy())
             all_phases.append(phase_angles.cpu().numpy())
@@ -368,3 +362,31 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
         os.remove(tmp_all)
 
     print(f"Phase-vs-metadata 输出保存在: {out_dir}")
+
+
+import math
+def _angle_diff(a, b):
+    two_pi = 2 * math.pi
+    diff = torch.remainder(a - b + math.pi, two_pi) - math.pi
+    return diff
+
+def rank_loss_sliding_window(pred, ranks, window=5, eps=0.1):
+    device = pred.device
+    n = len(ranks)
+    order = torch.tensor(np.argsort(ranks), dtype=torch.long, device=device)  # shape (n,)
+    # center indices in dataset order
+    centers = order.unsqueeze(1).repeat(1, 2 * window)  # (n, 2w)
+    # build neighbor indices by circularly rolling the order
+    neighs = []
+    for k in range(1, window + 1):
+        neighs.append(torch.roll(order, -k))  # next k
+        neighs.append(torch.roll(order, k))   # prev k
+    neighs = torch.stack(neighs, dim=1)  # (n, 2w)
+    centers_flat = centers.reshape(-1)
+    neighs_flat = neighs.reshape(-1)
+
+    p_cent = pred[centers_flat]       # (n*2w,)
+    p_nei = pred[neighs_flat]         # (n*2w,)
+    diffs = _angle_diff(p_nei, p_cent)
+    loss = torch.mean(1.0 - torch.cos(diffs - eps))
+    return loss

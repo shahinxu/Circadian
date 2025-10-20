@@ -9,8 +9,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import argparse
 import os
-from tqdm import tqdm
-
+from utils import rank_loss_sliding_window
 from AE import PhaseAutoEncoder
 from data_load import load_and_preprocess_train_data, load_and_preprocess_test_data
 from torch.utils.data import DataLoader
@@ -69,12 +68,16 @@ def train_model(
     
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=100)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        mode='min', 
+        factor=0.5, 
+        patience=100
+    )
     recon_criterion = nn.MSELoss()
     train_losses = []
     os.makedirs(save_dir, exist_ok=True)
 
-    # === 预训练阶段（greedy排序+对齐loss） ===
     all_expressions = []
     for i in range(len(train_dataset)):
         sample = train_dataset[i]
@@ -85,67 +88,45 @@ def train_model(
     order = greedy_ordering(components)
     ranks = np.empty(n_samples, dtype=np.int64)
     ranks[order] = np.arange(n_samples)
-    target_phases = (ranks.astype(np.float32) / n_samples) * (2 * np.pi)
     X = expressions_tensor
-    target_phases_t = torch.from_numpy(target_phases).to(device)
-
-    def align_loss(pred_phases, target_phases):
-        diff = pred_phases - target_phases
-        return torch.mean(1.0 - torch.cos(diff))
 
     stage1_epochs = int(num_epochs * stage1_frac)
     stage2_epochs = num_epochs - stage1_epochs
 
-    with tqdm(total=stage1_epochs, desc="Pretrain", disable=False) as pbar:
-        for epoch in range(stage1_epochs):
-            model.train()
-            optimizer.zero_grad()
-            _, pred_phases, recon = model(X, None)
-            recon_loss = recon_criterion(recon, X)
-            a_loss = align_loss(pred_phases, target_phases_t)
-            total = lambda_recon * recon_loss + lambda_align * a_loss
-            total.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            train_losses.append(total.item())
-            scheduler.step(total.item())
-            if epoch % 10 == 0:
-                print(f"Epoch {epoch+1}/{stage1_epochs}, "
-                      f"Recon Loss: {recon_loss.item():.4f}, "
-                      f"Align Loss: {a_loss.item():.4f}, "
-                      f"Total Loss: {total.item():.4f}")
-            # pbar.update(1)
+    for epoch in range(stage1_epochs):
+        model.train()
+        optimizer.zero_grad()
+        _, pred_phases, recon = model(X)
+        recon_loss = recon_criterion(recon, X)
+        a_loss = rank_loss_sliding_window(pred_phases, ranks, window=5, eps=0.1)
+        total = lambda_recon * recon_loss + lambda_align * a_loss
+        total.backward()
+        optimizer.step()
+        train_losses.append(total.item())
+        scheduler.step(total.item())
+        if epoch % 100 == 0:
+            print(f"Epoch {epoch+1}/{stage1_epochs}, "
+                    f"Recon Loss: {recon_loss.item():.4f}, "
+                    f"Align Loss: {a_loss.item():.4f}, "
+                    f"Total Loss: {total.item():.4f}")
 
-    # === 微调阶段（只重建loss） ===
-    with tqdm(total=stage2_epochs, desc="Finetune", disable=False) as pbar:
-        for epoch in range(stage2_epochs):
-            model.train()
-            optimizer.zero_grad()
-            _, pred_phases, recon = model(X, None)
-            recon_loss = recon_criterion(recon, X)
-            total = lambda_recon * recon_loss
-            total.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            train_losses.append(total.item())
-            scheduler.step(total.item())
-            pbar.update(1)
+    for epoch in range(stage2_epochs):
+        model.train()
+        optimizer.zero_grad()
+        _, pred_phases, recon = model(X)
+        recon_loss = recon_criterion(recon, X)
+        total = lambda_recon * recon_loss
+        total.backward()
+        optimizer.step()
+        train_losses.append(total.item())
+        scheduler.step(total.item())
 
-    torch.save(model.state_dict(), os.path.join(save_dir, 'two_stage_model.pth'))
     model.eval()
     with torch.no_grad():
-        _, pred_phases, recon = model(X, None)
-        pred_phases_np = pred_phases.cpu().numpy()
-    plot_components_by_phase(
-        components, 
-        pred_phases_np, 
-        os.path.join(save_dir, 'components_by_predicted_phase.png')
-    )
+        _, pred_phases, recon = model(X)
     return model, order
 
 def main():
-
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", required=True)
     parser.add_argument("--n_components", type=int, default=5)
@@ -153,7 +134,7 @@ def main():
     parser.add_argument("--stage1_frac", type=float, default=1)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--lambda_recon", type=float, default=0.001)
-    parser.add_argument("--lambda_align", type=float, default=2.0)
+    parser.add_argument("--lambda_align", type=float, default=1.0)
     parser.add_argument("--period_hours", type=float, default=24.0)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--device", default='cuda')
@@ -211,10 +192,8 @@ def main():
             'Predicted_Phase_Hours': pred_hours
         })
         
-        order_df.to_csv(os.path.join(save_dir, 'greedy_order.csv'), index=False)
         plot_comparsion(order_df, metadata, save_greedy)
 
-    # 测试集推理
     if os.path.isfile(test_file):
         test_dataset, test_preprocessing_info = load_and_preprocess_test_data(
             test_file, preprocessing_info

@@ -12,10 +12,10 @@ class PhaseAutoEncoder(nn.Module):
         super(PhaseAutoEncoder, self).__init__()
         self.input_dim = input_dim
         self.encoder = nn.Linear(input_dim, 2)  # no hidden, no activation
-        self.decoder = nn.Linear(2, input_dim)  # no hidden, no activation
-        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.decoder = nn.Linear(1, input_dim)
+        self.dropout = nn.Dropout(dropout)
 
-    def encode(self, x, celltype_indices=None):
+    def encode(self, x):
         x = self.dropout(x)
         phase_coords = self.encoder(x)
         phase_coords_normalized = circular_node(phase_coords)
@@ -24,9 +24,9 @@ class PhaseAutoEncoder(nn.Module):
         return phase_coords_normalized, phase_angles
 
     def decode(self, phase_coords_normalized):
-        return self.decoder(phase_coords_normalized)
+        return self.decoder(phase_coords_normalized.unsqueeze(1))
 
-    def forward(self, x, celltype_indices=None):
-        phase_coords_normalized, phase_angles = self.encode(x, celltype_indices)
-        reconstructed = self.decode(phase_coords_normalized)
+    def forward(self, x):
+        phase_coords_normalized, phase_angles = self.encode(x)
+        reconstructed = self.decode(phase_angles)
         return phase_coords_normalized, phase_angles, reconstructed
