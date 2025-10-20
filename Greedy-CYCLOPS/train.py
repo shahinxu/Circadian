@@ -12,12 +12,12 @@ import os
 from tqdm import tqdm
 
 from AE import PhaseAutoEncoder
-from dataset import load_and_preprocess_train_data, load_and_preprocess_test_data
+from data_load import load_and_preprocess_train_data, load_and_preprocess_test_data
 from torch.utils.data import DataLoader
 from utils import predict_and_save_phases
 
 def greedy_ordering(components: np.ndarray):
-    n, d = components.shape
+    n = components.shape[0]
     visited = np.zeros(n, dtype=bool)
     order = []
     start = np.argmin(np.sum(np.abs(components), axis=1))
@@ -25,7 +25,6 @@ def greedy_ordering(components: np.ndarray):
     order.append(cur)
     visited[cur] = True
     for _ in range(n - 1):
-        # compute L1 distances to unvisited
         diffs = np.abs(components - components[cur:cur+1, :])
         dists = np.sum(diffs, axis=1)
         dists[visited] = np.inf
@@ -34,58 +33,6 @@ def greedy_ordering(components: np.ndarray):
         visited[nxt] = True
         cur = nxt
     return np.array(order, dtype=int)
-
-def optimal_ordering_dp(components: np.ndarray):
-    n, d = components.shape
-
-    if n == 0:
-        return np.array([], dtype=int)
-    if n == 1:
-        return np.array([0], dtype=int)
-
-    dists = np.zeros((n, n))
-    for i in range(n):
-        for j in range(i + 1, n):
-            dist = np.sum(np.abs(components[i] - components[j]))
-            dists[i, j] = dists[j, i] = dist
-
-    start_node = np.argmin(np.sum(np.abs(components), axis=1))
-    num_masks = 1 << n
-    dp = np.full((num_masks, n), np.inf)
-    parent = np.full((num_masks, n), -1, dtype=int)
-
-    dp[1 << start_node, start_node] = 0
-
-    # 4. 填充 DP 表
-    for mask in range(1, num_masks):
-        for j in range(n):
-            if (mask >> j) & 1:
-                prev_mask = mask ^ (1 << j)
-                if prev_mask == 0:
-                    continue
-
-                for i in range(n):
-                    if (prev_mask >> i) & 1:
-                        new_dist = dp[prev_mask, i] + dists[i, j]
-                        if new_dist < dp[mask, j]:
-                            dp[mask, j] = new_dist
-                            parent[mask, j] = i
-
-    final_mask = num_masks - 1
-    
-    last_node = np.argmin(dp[final_mask])
-
-    order = []
-    cur_node = last_node
-    cur_mask = final_mask
-
-    for _ in range(n):
-        order.append(cur_node)
-        prev_node = parent[cur_mask, cur_node]
-        cur_mask ^= (1 << cur_node)
-        cur_node = prev_node
-    return np.array(order[::-1], dtype=int)
-
 
 def plot_components_by_phase(components, phases, save_path, n_plot=None):
     order = np.argsort(phases)
@@ -107,7 +54,7 @@ def plot_components_by_phase(components, phases, save_path, n_plot=None):
 
 
 def train_model(
-    model, train_dataset, preprocessing_info,
+    model: PhaseAutoEncoder, train_dataset, preprocessing_info,
     num_epochs=100, lr=1e-3, device='cuda',
     lambda_recon=0.2, lambda_time=0.0, lambda_align=1.0,
     save_dir='./model_checkpoints', stage1_frac=0.8):
@@ -149,7 +96,6 @@ def train_model(
     stage1_epochs = int(num_epochs * stage1_frac)
     stage2_epochs = num_epochs - stage1_epochs
 
-    print(f"[Pretrain] Stage1: {stage1_epochs} epochs, Stage2: {stage2_epochs} epochs")
     with tqdm(total=stage1_epochs, desc="Pretrain", disable=False) as pbar:
         for epoch in range(stage1_epochs):
             model.train()
@@ -190,7 +136,11 @@ def train_model(
     with torch.no_grad():
         _, pred_phases, recon = model(X, None)
         pred_phases_np = pred_phases.cpu().numpy()
-    plot_components_by_phase(components, pred_phases_np, os.path.join(save_dir, 'components_by_predicted_phase.png'))
+    plot_components_by_phase(
+        components, 
+        pred_phases_np, 
+        os.path.join(save_dir, 'components_by_predicted_phase.png')
+    )
     return model, order
 
 def main():

@@ -1,4 +1,5 @@
 import os
+import logging
 
 import numpy as np
 import pandas as pd
@@ -6,138 +7,54 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 import torch
 
+logger = logging.getLogger(__name__)
+
 def time_to_phase(time_hours, period_hours=24.0):
     return 2 * np.pi * time_hours / period_hours
 
-def create_prediction_plots(results_df, save_dir):
-    
-    plt.figure(figsize=(12, 8))
-    
-    plt.subplot(2, 2, 1)
-    plt.hist(results_df['Predicted_Phase_Hours'], bins=24, alpha=0.7, edgecolor='black')
-    plt.xlabel('Predicted Phase (Hours)')
-    plt.ylabel('Frequency')
-    plt.title('Distribution of Predicted Phases')
-    plt.grid(True, alpha=0.3)
-    
-    plt.subplot(2, 2, 2)
-    plt.scatter(results_df['Phase_X'], results_df['Phase_Y'], alpha=0.6)
-    plt.xlabel('Phase X')
-    plt.ylabel('Phase Y')
-    plt.title('Phase Distribution in Unit Circle')
-    plt.axis('equal')
-    plt.grid(True, alpha=0.3)
-    
-    circle = Circle((0, 0), 1, fill=False, color='red', linestyle='--', alpha=0.5)
-    plt.gca().add_patch(circle)
-    
-    if 'True_Time_Hours' in results_df.columns:
-        plt.subplot(2, 2, 3)
-        plt.scatter(results_df['True_Time_Hours'], results_df['Predicted_Phase_Hours'], alpha=0.6)
-        plt.plot([0, 24], [0, 24], 'r--', label='Perfect Prediction')
-        plt.xlabel('True Time (Hours)')
-        plt.ylabel('Predicted Phase (Hours)')
-        plt.title('True Time vs Predicted Phase')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        plt.subplot(2, 2, 4)
-        plt.hist(results_df['Phase_Error_Hours'], bins=20, alpha=0.7, edgecolor='black')
-        plt.xlabel('Prediction Error (Hours)')
-        plt.ylabel('Frequency')
-        plt.title('Distribution of Prediction Errors')
-        plt.grid(True, alpha=0.3)
-    else:
-        if 'Cell_Type' in results_df.columns:
-            plt.subplot(2, 2, 3)
-            unique_celltypes = results_df['Cell_Type'].unique()
-            cmap = plt.get_cmap('tab10')
-            colors = cmap(np.linspace(0, 1, len(unique_celltypes)))
-            
-            for i, celltype in enumerate(unique_celltypes):
-                mask = results_df['Cell_Type'] == celltype
-                plt.scatter(results_df.loc[mask, 'Phase_X'], 
-                          results_df.loc[mask, 'Phase_Y'], 
-                          c=[colors[i]], label=celltype, alpha=0.6)
-            
-            plt.xlabel('Phase X')
-            plt.ylabel('Phase Y')
-            plt.title('Phase Distribution by Cell Type')
-            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-            plt.axis('equal')
-            plt.grid(True, alpha=0.3)
-            
-            circle = Circle((0, 0), 1, fill=False, color='red', linestyle='--', alpha=0.5)
-            plt.gca().add_patch(circle)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, 'prediction_analysis.png'), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"预测分析图表保存到: {os.path.join(save_dir, 'prediction_analysis.png')}")
-
-
-def predict_and_save_phases(model, test_loader, preprocessing_info, device='cuda', save_dir='./results'):
-    print("\n=== 预测测试集相位 ===")
-    model.eval()
-    
-    celltype_to_idx = preprocessing_info.get('celltype_to_idx', {})
-    sample_names = preprocessing_info.get('test_sample_columns', [])
-    
+# Helper: run inference over test_loader and collect numpy results
+def _run_inference(model, test_loader, celltype_to_idx, device):
     all_phase_coords = []
     all_phases = []
     all_times = []
     all_celltypes = []
-    
-    batch_start_idx = 0
-    
+
+    model.eval()
     with torch.no_grad():
         for batch in test_loader:
             expressions = batch['expression'].to(device)
             times = batch.get('time', None)
             celltypes = batch.get('celltype', None)
-            
+
             celltype_indices = None
             if celltypes is not None and celltype_to_idx:
-                batch_celltype_indices = []
-                for ct in celltypes:
-                    batch_celltype_indices.append(celltype_to_idx.get(ct, 0))
+                batch_celltype_indices = [celltype_to_idx.get(ct, 0) for ct in celltypes]
                 celltype_indices = torch.tensor(batch_celltype_indices, device=device)
-            
+
             phase_coords, phase_angles, _ = model(expressions, celltype_indices)
-            
+
             all_phase_coords.append(phase_coords.cpu().numpy())
             all_phases.append(phase_angles.cpu().numpy())
-            
-            batch_size = expressions.shape[0]
-            batch_start_idx += batch_size
-            
+
             if times is not None:
                 all_times.append(times.cpu().numpy())
             if celltypes is not None:
                 all_celltypes.extend(celltypes)
-    
-    phase_coords = np.vstack(all_phase_coords)
-    phases = np.concatenate(all_phases)
-    
-    if all_times:
-        times = np.concatenate(all_times)
-    else:
-        times = None
-        
-    if all_celltypes:
-        celltypes = np.array(all_celltypes)
-    else:
-        celltypes = None
-    
-    os.makedirs(save_dir, exist_ok=True)
-    
+
+    phase_coords = np.vstack(all_phase_coords) if all_phase_coords else np.empty((0, 2))
+    phases = np.concatenate(all_phases) if all_phases else np.empty((0,))
+    times = np.concatenate(all_times) if all_times else None
+    celltypes = np.array(all_celltypes) if all_celltypes else None
+    return phase_coords, phases, times, celltypes
+
+
+def _assemble_results_df(phase_coords, phases, times, celltypes, preprocessing_info, sample_names=None):
     if sample_names and len(sample_names) == len(phases):
         sample_identifiers = sample_names
     else:
         sample_identifiers = [f"Sample_{i}" for i in range(len(phases))]
-        print("警告: 无法获取样本名称，使用生成的索引")
-    
+        logger.warning("Could not get sample names; using generated indices")
+
     results_data = {
         'Sample_ID': sample_identifiers,
         'Phase_X': phase_coords[:, 0],
@@ -146,56 +63,64 @@ def predict_and_save_phases(model, test_loader, preprocessing_info, device='cuda
         'Predicted_Phase_Degrees': phases * 180 / np.pi,
         'Predicted_Phase_Hours': phases * preprocessing_info.get('period_hours', 24.0) / (2 * np.pi)
     }
-    
+
     if times is not None:
         results_data['True_Time_Hours'] = times
         results_data['True_Phase_Radians'] = time_to_phase(times, preprocessing_info.get('period_hours', 24.0))
-        results_data['Phase_Error_Radians'] = np.abs(phases - results_data['True_Phase_Radians'])
-        results_data['Phase_Error_Radians'] = np.minimum(
-            results_data['Phase_Error_Radians'], 
-            2*np.pi - results_data['Phase_Error_Radians']
-        )
-        results_data['Phase_Error_Hours'] = results_data['Phase_Error_Radians'] * preprocessing_info.get('period_hours', 24.0) / (2 * np.pi)
-    
+        perr = np.abs(phases - results_data['True_Phase_Radians'])
+        perr = np.minimum(perr, 2 * np.pi - perr)
+        results_data['Phase_Error_Radians'] = perr
+        results_data['Phase_Error_Hours'] = perr * preprocessing_info.get('period_hours', 24.0) / (2 * np.pi)
+
     if celltypes is not None:
         results_data['Cell_Type'] = celltypes
-    
-    results_df = pd.DataFrame(results_data)
-    
-    # 不保存任何预测CSV，确保目录内不遗留历史预测文件
+
+    return pd.DataFrame(results_data)
+
+
+def _remove_legacy_prediction_files(save_dir):
     for fname in ('phase_predictions.csv', 'phase_predictions_simple.csv'):
         fpath = os.path.join(save_dir, fname)
         if os.path.isfile(fpath):
             try:
                 os.remove(fpath)
-                print(f"已删除遗留文件: {fpath}")
-            except Exception as e:
-                print(f"[WARN] 无法删除遗留文件 {fpath}: {e}")
-    
-    print(f"\n=== 预测统计 ===")
-    print(f"预测样本数量: {len(phases)}")
-    print(f"预测相位范围: {phases.min():.3f} - {phases.max():.3f} 弧度")
-    print(f"预测相位范围: {(phases * 180 / np.pi).min():.1f} - {(phases * 180 / np.pi).max():.1f} 度")
-    print(f"预测时间范围: {results_data['Predicted_Phase_Hours'].min():.2f} - {results_data['Predicted_Phase_Hours'].max():.2f} 小时")
-    
+                logger.debug("Removed legacy file: %s", fpath)
+            except Exception:
+                logger.exception("Failed to remove legacy file: %s", fpath)
+
+
+def predict_and_save_phases(model, test_loader, preprocessing_info, device='cuda', save_dir='./results'):
+    """Run model on test_loader and return a standardized results DataFrame.
+
+    This function orchestrates inference, assembly of results, optional cleanup and
+    logging. It intentionally delegates subtasks to small helpers for clarity.
+    """
+    logger.info("Predicting test-set phases")
+
+    celltype_to_idx = preprocessing_info.get('celltype_to_idx', {})
+    sample_names = preprocessing_info.get('test_sample_columns', [])
+
+    phase_coords, phases, times, celltypes = _run_inference(model, test_loader, celltype_to_idx, device)
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    results_df = _assemble_results_df(phase_coords, phases, times, celltypes, preprocessing_info, sample_names)
+
+    _remove_legacy_prediction_files(save_dir)
+
+    logger.info("Predicted %d samples; results available in %s", len(phases), save_dir)
+
     if times is not None:
-        mean_error_hours = np.mean(results_data['Phase_Error_Hours'])
-        std_error_hours = np.std(results_data['Phase_Error_Hours'])
-        print(f"平均预测误差: {mean_error_hours:.2f} ± {std_error_hours:.2f} 小时")
-        
-        for threshold in [1, 2, 3, 6]:
-            accuracy = np.mean(results_data['Phase_Error_Hours'] <= threshold) * 100
-            print(f"误差 ≤ {threshold}小时的样本比例: {accuracy:.1f}%")
-    
-    if celltypes is not None:
-        print(f"\n按细胞类型统计:")
-        celltype_stats = results_df.groupby('Cell_Type').agg({
-            'Predicted_Phase_Hours': ['mean', 'std', 'count']
-        }).round(2)
-        print(celltype_stats)
-    
-    create_prediction_plots(results_df, save_dir)
-    
+        mean_error_hours = np.mean(results_df['Phase_Error_Hours'])
+        std_error_hours = np.std(results_df['Phase_Error_Hours'])
+        logger.info("Mean error: %.2f ± %.2f hours", mean_error_hours, std_error_hours)
+
+    if 'Cell_Type' in results_df.columns:
+        celltype_stats = results_df.groupby('Cell_Type').agg({'Predicted_Phase_Hours': ['mean', 'std', 'count']}).round(2)
+        logger.info("Per-celltype stats:\n%s", celltype_stats)
+
+    logger.debug("create_prediction_plots was removed; no additional plots saved")
+
     return results_df
 
 def sanitize_filename(s: str) -> str:
@@ -309,12 +234,13 @@ def best_align_phase_for_comparison(
     x_hours: np.ndarray,
     y_hours: np.ndarray,
     step: float = 0.1,
+    period: float = 24.0,
 ) -> tuple[np.ndarray, float, float, float, float, bool]:
     from scipy.stats import pearsonr, spearmanr
 
     x_arr: np.ndarray = np.asarray(x_hours, dtype=float)
     y_arr: np.ndarray = np.asarray(y_hours, dtype=float)
-    shifts: np.ndarray = np.arange(0.0, 24.0, step, dtype=float)
+    shifts: np.ndarray = np.arange(0.0, period, step, dtype=float)
 
     best_r = -np.inf
     best = {
@@ -327,7 +253,7 @@ def best_align_phase_for_comparison(
     }
 
     for flipped in (False, True):
-        x0: np.ndarray = (24.0 - x_arr) % 24.0 if flipped else x_arr
+        x0: np.ndarray = (period - x_arr) % period if flipped else x_arr
         for s in shifts:
             xs = (x0 + s) % 24.0
             xs_np = np.asarray(xs, dtype=float)
@@ -385,20 +311,22 @@ def plot_phase_vs_metadata_comparison(pred_csv: str, celltype: str, meta: pd.Dat
             print(f"[WARN] No matches for {celltype} ({pred_csv})")
             return None
 
+        # joined contains hours (0..24) for both prediction and metadata
         phase_hours = np.asarray(joined['pred_phase'], dtype=float)
         metadata_hours = np.asarray(joined['time_mod24'], dtype=float)
 
-        aligned, r, r2, spearman_R, best_shift, flipped = best_align_phase_for_comparison(phase_hours, metadata_hours, step=0.1)
+        # Convert hours -> radians (map [0, period_hours) -> [0, 2*pi))
+        phase_rad = time_to_phase(phase_hours, period_hours=24.0)
+        metadata_rad = time_to_phase(metadata_hours, period_hours=24.0)
+
+        # Align in radians over a period of 2*pi
+        aligned, r, r2, spearman_R, best_shift, flipped = best_align_phase_for_comparison(
+            phase_rad, metadata_rad, step=0.1, period=2 * np.pi
+        )
 
         plt.figure(figsize=(8, 7))
-        plt.scatter(aligned, metadata_hours)
-        plt.xlabel('Predicted Time', fontsize=24)
-        plt.ylabel('Collection Time', fontsize=24)
-
-        subtitle = f'Shift={best_shift:.2f}h'
-        if flipped:
-            subtitle += ' (flipped)'
-
+        plt.scatter(aligned, metadata_rad, s=12, alpha=0.8)
+        # Minimal plot: no legend, no title, no extra subtitle
         plt.grid(True, alpha=0.3, linestyle='--')
         plt.tight_layout()
 
