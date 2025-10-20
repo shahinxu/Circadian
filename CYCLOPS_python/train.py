@@ -1,24 +1,3 @@
-def plot_decoder_fits(model, n_components, save_path):
-    model.eval()
-    phases = torch.linspace(0, 2 * np.pi, 200)
-    phases = phases.to(next(model.parameters()).device) 
-    # Convert phase angles to 2D coordinates for decoder input
-    phase_coords = torch.stack([torch.cos(phases), torch.sin(phases)], dim=1)  # (200, 2)
-    with torch.no_grad():
-        decoded = model.decode(phase_coords)  # (200, n_components)
-        decoded = decoded.cpu().numpy()
-    plt.figure(figsize=(8, 5))
-    for i in range(n_components):
-        plt.plot(phases.cpu().numpy(), decoded[:, i], label=f'PC{i+1}')
-    plt.xlabel('Phase (radian)')
-    plt.ylabel('Decoder Output')
-    plt.title('Decoder Output vs Phase')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=200)
-    plt.close()
-    print(f"Decoder拟合曲线已保存: {save_path}")
-import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
@@ -29,7 +8,7 @@ import argparse
 import os
 from tqdm import tqdm
 from AE import PhaseAutoEncoder
-from utils import predict_and_save_phases
+from utils import predict_and_save_phases, plot_comparsion
 from dataset import load_and_preprocess_train_data, load_and_preprocess_test_data
 
 def train_model(model, train_dataset, preprocessing_info, 
@@ -68,10 +47,6 @@ def train_model(model, train_dataset, preprocessing_info,
         if 'celltype' in sample:
             all_celltypes.append(sample['celltype'])
     expressions_tensor = torch.stack(all_expressions).to(device)
-    valid_mask_tensor = torch.tensor(valid_mask, device=device)
-    times_tensor = None
-    if all_times:
-        times_tensor = torch.stack(all_times).to(device)
     celltypes_array = None
     if all_celltypes:
         celltypes_array = np.array(all_celltypes)
@@ -93,16 +68,14 @@ def train_model(model, train_dataset, preprocessing_info,
             phase_coords, _, reconstructed = model(expressions_tensor, celltype_indices_tensor)
             phase_coords_norm = torch.norm(phase_coords, dim=1, keepdim=True) + 1e-8
             phase_coords_normalized = phase_coords / phase_coords_norm
-            # CircularNode loss: MSE between phase_coords and phase_coords_normalized
             circular_loss = nn.functional.mse_loss(phase_coords, phase_coords_normalized)
-            # Reconstruction loss: MSE between input and reconstructed output
             recon_loss = nn.functional.mse_loss(reconstructed, expressions_tensor)
             total_loss = circular_loss + lambda_recon * recon_loss
             total_loss.backward()
             optimizer.step()
             train_losses.append(total_loss.item())
             scheduler.step(total_loss.item())
-            if epoch % 10 == 0:
+            if epoch % 100 == 0:
                 print(f"Epoch {epoch}: circular_loss={circular_loss.item():.4f}, recon_loss={recon_loss.item():.4f}")
             pbar.update(1)
     return train_losses
@@ -174,9 +147,7 @@ def main():
     plt.grid(True, alpha=0.3)
     plt.savefig(os.path.join(save_dir, 'training_curves.png'), dpi=300, bbox_inches='tight')
     plt.close()
-    
-    plot_decoder_fits(model, args.n_components, os.path.join(save_dir, 'decoder_fit.png'))
-        
+            
     if os.path.isfile(test_file):
         test_dataset, test_preprocessing_info = load_and_preprocess_test_data(
             test_file, preprocessing_info
@@ -188,10 +159,8 @@ def main():
             preprocessing_info=test_preprocessing_info,
             device=args.device,
             save_dir=save_dir
-        )
-        if os.path.isfile(metadata):
-            from utils import generate_phase_metadata_comparison
-            generate_phase_metadata_comparison(results_df, metadata, save_dir)
+        )            
+        plot_comparsion(results_df, metadata, save_dir)
     else:
         print("Training completed. No test file provided, so no predictions made.")
 

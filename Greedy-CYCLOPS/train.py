@@ -9,7 +9,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import argparse
 import os
-from utils import rank_loss_sliding_window
+from utils import rank_loss
 from AE import PhaseAutoEncoder
 from data_load import load_and_preprocess_train_data, load_and_preprocess_test_data
 from torch.utils.data import DataLoader
@@ -98,13 +98,13 @@ def train_model(
         optimizer.zero_grad()
         _, pred_phases, recon = model(X)
         recon_loss = recon_criterion(recon, X)
-        a_loss = rank_loss_sliding_window(pred_phases, ranks, window=5, eps=0.1)
+        a_loss = rank_loss(pred_phases, ranks, window=5)
         total = lambda_recon * recon_loss + lambda_align * a_loss
         total.backward()
         optimizer.step()
         train_losses.append(total.item())
         scheduler.step(total.item())
-        if epoch % 100 == 0:
+        if epoch % 10 == 0:
             print(f"Epoch {epoch+1}/{stage1_epochs}, "
                     f"Recon Loss: {recon_loss.item():.4f}, "
                     f"Align Loss: {a_loss.item():.4f}, "
@@ -126,6 +126,54 @@ def train_model(
         _, pred_phases, recon = model(X)
     return model, order
 
+
+def evaluate_order_plot(pred_order, preprocessing_info, metadata_path, save_dir, period_hours=24.0):
+    """Create an order DataFrame from pred_order and call plot_comparsion.
+
+    This is separated from main so plotting/IO is not mixed into training.
+    """
+    if not os.path.isfile(metadata_path):
+        return None
+
+    n_samples = len(pred_order)
+    pred_hours = (np.arange(n_samples) / n_samples) * period_hours
+    sample_names = preprocessing_info.get('sample_columns', [])
+    order_df = pd.DataFrame({
+        'Sample_ID': sample_names,
+        'Predicted_Order': pred_order,
+        'Predicted_Phase_Hours': pred_hours
+    })
+    save_greedy = os.path.join(save_dir + '_greedy') if save_dir else save_dir + '_greedy'
+    return plot_comparsion(order_df, metadata_path, save_greedy)
+
+
+def evaluate_test_set(model, test_file, preprocessing_info, save_dir, device='cuda', metadata_path=None):
+    """Run prediction on test set and optionally plot comparison with metadata.
+
+    Returns results_df or None on failure.
+    """
+    if not os.path.isfile(test_file):
+        print("No test file provided; skipping test set evaluation.")
+        return None
+
+    test_dataset, test_preprocessing_info = load_and_preprocess_test_data(
+        test_file, preprocessing_info
+    )
+    test_loader = DataLoader(test_dataset, batch_size=1000, shuffle=False)
+
+    results_df = predict_and_save_phases(
+        model=model,
+        test_loader=test_loader,
+        preprocessing_info=test_preprocessing_info,
+        device=device,
+        save_dir=save_dir
+    )
+
+    if metadata_path and os.path.isfile(metadata_path) and results_df is not None:
+        plot_comparsion(results_df, metadata_path, save_dir)
+
+    return results_df
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", required=True)
@@ -134,7 +182,7 @@ def main():
     parser.add_argument("--stage1_frac", type=float, default=1)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--lambda_recon", type=float, default=0.001)
-    parser.add_argument("--lambda_align", type=float, default=1.0)
+    parser.add_argument("--lambda_align", type=float, default=1)
     parser.add_argument("--period_hours", type=float, default=24.0)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--device", default='cuda')
@@ -146,7 +194,6 @@ def main():
     test_file = os.path.join(base_data, "expression.csv")
     metadata = os.path.join(base_data, "metadata.csv")
     save_dir = os.path.join("results", args.dataset_path)
-    save_greedy = save_dir + '_greedy'
 
     torch.manual_seed(args.random_seed)
     np.random.seed(args.random_seed)
@@ -178,39 +225,26 @@ def main():
         save_dir=save_dir,
         stage1_frac=args.stage1_frac
     )
+    
+    # Post-training: generate order plot (if metadata present)
+    evaluate_order_plot(
+        pred_order, 
+        preprocessing_info, 
+        metadata, 
+        save_dir, 
+        period_hours=args.period_hours
+    )
 
-    if os.path.isfile(metadata):
-        n_samples = len(pred_order)
-        pred_hours = (np.arange(n_samples) / n_samples) * args.period_hours
-        sample_names = preprocessing_info.get('sample_columns', [])
-        print(len(sample_names))
-        print(len(pred_order))
-        print(len(pred_hours))
-        order_df = pd.DataFrame({
-            'Sample_ID': sample_names,
-            'Predicted_Order': pred_order,
-            'Predicted_Phase_Hours': pred_hours
-        })
-        
-        plot_comparsion(order_df, metadata, save_greedy)
-
-    if os.path.isfile(test_file):
-        test_dataset, test_preprocessing_info = load_and_preprocess_test_data(
-            test_file, preprocessing_info
-        )
-        test_loader = DataLoader(test_dataset, batch_size=1000, shuffle=False)
-
-        results_df = predict_and_save_phases(
-            model=model,
-            test_loader=test_loader,
-            preprocessing_info=test_preprocessing_info,
-            device=args.device,
-            save_dir=save_dir
-        )
-
-        if os.path.isfile(metadata):
-            plot_comparsion(results_df, metadata, save_dir)
-    else:
+    # Evaluate on test set (predict + optional plotting)
+    results_df = evaluate_test_set(
+        model, 
+        test_file, 
+        preprocessing_info, 
+        save_dir, 
+        device=args.device, 
+        metadata_path=metadata
+    )
+    if results_df is None and not os.path.isfile(test_file):
         print("Training completed. No test file provided, so no predictions made.")
 
 

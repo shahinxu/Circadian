@@ -1,11 +1,10 @@
 import os
 import logging
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
 import torch
+from scipy.stats import pearsonr, spearmanr
 
 logger = logging.getLogger(__name__)
 
@@ -258,10 +257,8 @@ def best_align_phase_for_comparison(
                 r = np.nan
             if not np.isfinite(r):
                 continue
-            # Maximize positive correlation after allowing flip
             if r > best_r:
                 best_r = r
-                # Calculate Spearman correlation for the best alignment
                 try:
                     spearman_R = float(spearmanr(xs_np, y_np)[0])
                 except Exception:
@@ -285,83 +282,58 @@ def best_align_phase_for_comparison(
     )
 
 
-def plot_phase_vs_metadata_comparison(pred_csv: str, celltype: str, meta: pd.DataFrame, out_dir: str):
-    try:
-        preds = load_predictions_for_comparison(pred_csv)
-        base_columns = [c for c in ('study_sample', 'time_mod24') if c in meta.columns]
-        if {'study_sample', 'time_mod24'}.issubset(base_columns):
-            meta_view = meta[['study_sample', 'time_mod24']].copy()
-        elif 'sample' in meta.columns and 'time_mod24' in meta.columns:
-            meta_view = meta[['sample', 'time_mod24']].copy()
-            meta_view = meta_view.rename(columns={'sample': 'study_sample'})
-        else:
-            raise ValueError('metadata must contain columns for sample identifiers and time_mod24')
-
-        meta_view['study_sample'] = meta_view['study_sample'].astype(str)
-        preds['study_sample'] = preds['study_sample'].astype(str)
-
-        joined = preds.merge(meta_view, on='study_sample', how='left').dropna(subset=['pred_phase', 'time_mod24'])
-        if joined.empty:
-            print(f"[WARN] No matches for {celltype} ({pred_csv})")
-            return None
-
-        # joined contains hours (0..24) for both prediction and metadata
-        phase_hours = np.asarray(joined['pred_phase'], dtype=float)
-        metadata_hours = np.asarray(joined['time_mod24'], dtype=float)
-
-        # Convert hours -> radians (map [0, period_hours) -> [0, 2*pi))
-        phase_rad = time_to_phase(phase_hours, period_hours=24.0)
-        metadata_rad = time_to_phase(metadata_hours, period_hours=24.0)
-
-        # Align in radians over a period of 2*pi
-        aligned, r, r2, spearman_R, best_shift, flipped = best_align_phase_for_comparison(
-            phase_rad, metadata_rad, step=0.1, period=2 * np.pi
-        )
-
-        plt.figure(figsize=(8, 7))
-        plt.scatter(aligned, metadata_rad, s=12, alpha=0.8)
-        # Minimal plot: no legend, no title, no extra subtitle
-        plt.grid(True, alpha=0.3, linestyle='--')
-        plt.tight_layout()
-
-        os.makedirs(out_dir, exist_ok=True)
-        safe_ct = sanitize_filename(celltype)
-        out_path = os.path.join(out_dir, f'phase_vs_time_{safe_ct}.png')
-        plt.savefig(out_path, dpi=150, bbox_inches='tight')
-        plt.close()
-        print(f'Saved: {out_path}')
-        return out_path, r, r2, spearman_R
-
-    except Exception as e:
-        print(f"[ERROR] Failed to plot phase vs metadata for {celltype}: {e}")
-        return None
-
-
 def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
-    print(f"Results DataFrame shape: {results_df.shape}")
-    print(f"Results DataFrame columns: {list(results_df.columns)}")
     meta = load_metadata_for_phase_comparison(metadata_csv)
 
     out_dir = os.path.join(save_dir, 'phase_vs_metadata')
     os.makedirs(out_dir, exist_ok=True)
 
-    # Prepare a temporary CSV with the required columns
-    tmp_all = os.path.join(out_dir, 'preds_ALL.tmp.csv')
-    sub = results_df[['Sample_ID', 'Predicted_Phase_Hours']].copy()
-    sub.to_csv(tmp_all, index=False)
-    print(f"生成临时预测文件: {tmp_all}")
+    if 'Sample_ID' not in results_df.columns or 'Predicted_Phase_Hours' not in results_df.columns:
+        raise ValueError('results_df must contain Sample_ID and Predicted_Phase_Hours columns')
 
-    result = plot_phase_vs_metadata_comparison(tmp_all, 'ALL', meta, out_dir)
-    if result is not None:
-        _, r, r2, spearman_R = result
-        print(f"整体 phase-vs-metadata 图已生成: R={r:.3f}, R²={r2:.3f}, Spearman ρ={spearman_R:.3f}")
-    else:
-        print("[WARN] 无法生成 phase-vs-metadata 图（可能没有匹配）")
+    preds = results_df[['Sample_ID', 'Predicted_Phase_Hours']].copy()
+    preds = preds.rename(columns={'Sample_ID': 'study_sample', 'Predicted_Phase_Hours': 'pred_phase'})
+    preds['study_sample'] = preds['study_sample'].astype(str)
 
-    if os.path.isfile(tmp_all):
-        os.remove(tmp_all)
+    meta_view = meta.copy()
+    meta_view['study_sample'] = meta_view['study_sample'].astype(str)
 
-    print(f"Phase-vs-metadata 输出保存在: {out_dir}")
+    joined = preds.merge(meta_view, on='study_sample', how='left').dropna(subset=['pred_phase', 'time_mod24'])
+    if joined.empty:
+        print(f"[WARN] No matches between predictions and metadata")
+        return None
+
+    phase_hours = np.asarray(joined['pred_phase'], dtype=float)
+    metadata_hours = np.asarray(joined['time_mod24'], dtype=float)
+
+    phase_rad = time_to_phase(phase_hours, period_hours=24.0)
+    metadata_rad = time_to_phase(metadata_hours, period_hours=24.0)
+
+    try:
+        r = float(pearsonr(phase_rad, metadata_rad)[0])
+    except Exception:
+        r = float('nan')
+    try:
+        spearman_R = float(spearmanr(phase_rad, metadata_rad)[0])
+    except Exception:
+        spearman_R = float('nan')
+    r2 = r * r if np.isfinite(r) else float('nan')
+    aligned = phase_rad
+
+    plt.figure(figsize=(8, 7))
+    plt.scatter(aligned, metadata_rad, s=12, alpha=0.8)
+    plt.grid(True, alpha=0.3, linestyle='--')
+    plt.tight_layout()
+
+    out_path = os.path.join(out_dir, f'comparsion.png')
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f'Saved: {out_path}')
+
+    print(f"overall metrics: R={r:.3f}, R²={r2:.3f}, Spearman ρ={spearman_R:.3f}")
+    print(f"plot saved in: {out_path}")
+
+    return out_path, r, r2, spearman_R
 
 
 import math
@@ -370,23 +342,36 @@ def _angle_diff(a, b):
     diff = torch.remainder(a - b + math.pi, two_pi) - math.pi
     return diff
 
-def rank_loss_sliding_window(pred, ranks, window=5, eps=0.1):
+def rank_loss(pred, ranks, window=5):
     device = pred.device
     n = len(ranks)
     order = torch.tensor(np.argsort(ranks), dtype=torch.long, device=device)  # shape (n,)
-    # center indices in dataset order
-    centers = order.unsqueeze(1).repeat(1, 2 * window)  # (n, 2w)
-    # build neighbor indices by circularly rolling the order
-    neighs = []
-    for k in range(1, window + 1):
-        neighs.append(torch.roll(order, -k))  # next k
-        neighs.append(torch.roll(order, k))   # prev k
-    neighs = torch.stack(neighs, dim=1)  # (n, 2w)
-    centers_flat = centers.reshape(-1)
-    neighs_flat = neighs.reshape(-1)
+    base_eps = (2 * math.pi) / n
+    
+    total_loss = 0.0
+    num_pairs = 0
 
-    p_cent = pred[centers_flat]       # (n*2w,)
-    p_nei = pred[neighs_flat]         # (n*2w,)
-    diffs = _angle_diff(p_nei, p_cent)
-    loss = torch.mean(1.0 - torch.cos(diffs - eps))
-    return loss
+    for k in range(1, window + 1):
+        centers = order
+        neighs = torch.roll(order, -k)
+
+        p_cent = pred[centers]  # (n,)
+        p_nei = pred[neighs]    # (n,)
+
+        # 1. 计算这对 (i, i+k) 的实际角度差
+        diffs = _angle_diff(p_nei, p_cent)
+        
+        # 2. 计算这对 (i, i+k) 的 *目标* 角度差
+        # 目标差值是 k * base_eps
+        target_diff = k * base_eps
+        
+        loss_k = 1.0 - torch.cos(diffs - target_diff)
+        
+        total_loss += torch.sum(loss_k)
+        num_pairs += n
+
+    if num_pairs == 0:
+        return torch.tensor(0.0, device=device)
+        
+    final_loss = total_loss / num_pairs
+    return final_loss

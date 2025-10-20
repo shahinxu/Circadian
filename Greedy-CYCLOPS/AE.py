@@ -11,7 +11,7 @@ class PhaseAutoEncoder(nn.Module):
     def __init__(self, input_dim, dropout=0.0):
         super(PhaseAutoEncoder, self).__init__()
         self.input_dim = input_dim
-        self.encoder = nn.Linear(input_dim, 2)  # no hidden, no activation
+        self.encoder = nn.Linear(input_dim, 2)
         self.decoder = nn.Linear(1, input_dim)
         self.dropout = nn.Dropout(dropout)
 
