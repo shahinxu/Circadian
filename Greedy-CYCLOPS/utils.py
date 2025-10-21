@@ -11,8 +11,7 @@ logger = logging.getLogger(__name__)
 def time_to_phase(time_hours, period_hours=24.0):
     return 2 * np.pi * time_hours / period_hours
 
-# Helper: run inference over test_loader and collect numpy results
-def _run_inference(model, test_loader, celltype_to_idx, device):
+def _run_inference(model, test_loader, device):
     all_phase_coords = []
     all_phases = []
     all_times = []
@@ -82,18 +81,18 @@ def _remove_legacy_prediction_files(save_dir):
                 logger.exception("Failed to remove legacy file: %s", fpath)
 
 
-def predict_and_save_phases(model, test_loader, preprocessing_info, device='cuda', save_dir='./results'):
-    """Run model on test_loader and return a standardized results DataFrame.
-
-    This function orchestrates inference, assembly of results, optional cleanup and
-    logging. It intentionally delegates subtasks to small helpers for clarity.
-    """
+def predict_and_save_phases(
+        model, 
+        test_loader, 
+        preprocessing_info, 
+        device='cuda', 
+        save_dir='./results'
+    ) -> pd.DataFrame:
     logger.info("Predicting test-set phases")
 
-    celltype_to_idx = preprocessing_info.get('celltype_to_idx', {})
     sample_names = preprocessing_info.get('test_sample_columns', [])
 
-    phase_coords, phases, times, celltypes = _run_inference(model, test_loader, celltype_to_idx, device)
+    phase_coords, phases, times, celltypes = _run_inference(model, test_loader, device)
 
     os.makedirs(save_dir, exist_ok=True)
 
@@ -108,16 +107,11 @@ def predict_and_save_phases(model, test_loader, preprocessing_info, device='cuda
         std_error_hours = np.std(results_df['Phase_Error_Hours'])
         logger.info("Mean error: %.2f ± %.2f hours", mean_error_hours, std_error_hours)
 
-    if 'Cell_Type' in results_df.columns:
-        celltype_stats = results_df.groupby('Cell_Type').agg({'Predicted_Phase_Hours': ['mean', 'std', 'count']}).round(2)
-        logger.info("Per-celltype stats:\n%s", celltype_stats)
-
     logger.debug("create_prediction_plots was removed; no additional plots saved")
 
     return results_df
 
 def sanitize_filename(s: str) -> str:
-    """Sanitize filename for safe file operations"""
     if s is None:
         return 'ALL'
     return ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in str(s))
@@ -130,7 +124,6 @@ def load_metadata_for_phase_comparison(metadata_csv: str) -> pd.DataFrame:
     def to_float_series(s):
         return pd.to_numeric(s, errors='coerce')
 
-    # Case 1: study + sample + time
     if {'study', 'sample', 'time'}.issubset(cols):
         m = meta.copy()
         m['study'] = m['study'].astype(str)
@@ -139,28 +132,24 @@ def load_metadata_for_phase_comparison(metadata_csv: str) -> pd.DataFrame:
         m['time_mod24'] = to_float_series(m['time']) % 24
         return m[['study_sample', 'time_mod24']]
 
-    # Case 2: study_sample + time_mod24
     if {'study_sample', 'time_mod24'}.issubset(cols):
         m = meta.copy()
         m['study_sample'] = m['study_sample'].astype(str)
         m['time_mod24'] = to_float_series(m['time_mod24']) % 24
         return m[['study_sample', 'time_mod24']]
 
-    # Case 3: study_sample + time
     if {'study_sample', 'time'}.issubset(cols):
         m = meta.copy()
         m['study_sample'] = m['study_sample'].astype(str)
         m['time_mod24'] = to_float_series(m['time']) % 24
         return m[['study_sample', 'time_mod24']]
 
-    # Case 4: Sample + Time_Hours
     if {'Sample', 'Time_Hours'}.issubset(cols):
         m = meta.copy()
         m['study_sample'] = m['Sample'].astype(str)
         m['time_mod24'] = to_float_series(m['Time_Hours']) % 24
         return m[['study_sample', 'time_mod24']]
 
-    # Case 5: Sample + time
     if {'Sample', 'time'}.issubset(cols):
         m = meta.copy()
         m['study_sample'] = m['Sample'].astype(str)
@@ -171,7 +160,6 @@ def load_metadata_for_phase_comparison(metadata_csv: str) -> pd.DataFrame:
 
 
 def load_predictions_for_comparison(pred_csv: str) -> pd.DataFrame:
-    """Load predictions CSV and standardize column names"""
     df = pd.read_csv(pred_csv)
     # Infer study_sample
     if 'study_sample' in df.columns:
@@ -183,14 +171,12 @@ def load_predictions_for_comparison(pred_csv: str) -> pd.DataFrame:
     elif 'Sample' in df.columns:
         df['study_sample'] = df['Sample'].astype(str)
     elif 'Sample_ID' in df.columns:
-        # my_cyclops phase_predictions_simple.csv uses Sample_ID
         df['study_sample'] = df['Sample_ID'].astype(str)
     elif 'sample' in df.columns:
         df['study_sample'] = df['sample'].astype(str)
     else:
         raise ValueError(f'{pred_csv}: cannot infer study_sample (expected study+sample, Sample, or study_sample)')
 
-    # Infer predicted phase
     if 'Predicted_Phase_Hours' in df.columns:
         pred_hours = pd.to_numeric(df['Predicted_Phase_Hours'], errors='coerce')
     elif 'Predicted_Phase_Radians' in df.columns:
@@ -219,8 +205,6 @@ def load_predictions_for_comparison(pred_csv: str) -> pd.DataFrame:
 
     df['pred_phase'] = pred_hours % 24
     return df[['study_sample', 'pred_phase']]
-
-
 
 
 def best_align_phase_for_comparison(

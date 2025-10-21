@@ -127,11 +127,13 @@ def train_model(
     return model, order
 
 
-def evaluate_order_plot(pred_order, preprocessing_info, metadata_path, save_dir, period_hours=24.0):
-    """Create an order DataFrame from pred_order and call plot_comparsion.
-
-    This is separated from main so plotting/IO is not mixed into training.
-    """
+def evaluate_order_plot(
+        pred_order, 
+        preprocessing_info, 
+        metadata_path, 
+        save_dir, 
+        period_hours=24.0
+    ):
     if not os.path.isfile(metadata_path):
         return None
 
@@ -147,11 +149,14 @@ def evaluate_order_plot(pred_order, preprocessing_info, metadata_path, save_dir,
     return plot_comparsion(order_df, metadata_path, save_greedy)
 
 
-def evaluate_test_set(model, test_file, preprocessing_info, save_dir, device='cuda', metadata_path=None):
-    """Run prediction on test set and optionally plot comparison with metadata.
-
-    Returns results_df or None on failure.
-    """
+def evaluate_test_set(
+        model, 
+        test_file, 
+        preprocessing_info, 
+        save_dir, 
+        device='cuda', 
+        metadata_path=None
+    ):
     if not os.path.isfile(test_file):
         print("No test file provided; skipping test set evaluation.")
         return None
@@ -181,7 +186,7 @@ def main():
     parser.add_argument("--num_epochs", type=int, default=2000)
     parser.add_argument("--stage1_frac", type=float, default=1)
     parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--lambda_recon", type=float, default=0.001)
+    parser.add_argument("--lambda_recon", type=float, default=0.01)
     parser.add_argument("--lambda_align", type=float, default=1)
     parser.add_argument("--period_hours", type=float, default=24.0)
     parser.add_argument("--dropout", type=float, default=0.2)
@@ -225,8 +230,7 @@ def main():
         save_dir=save_dir,
         stage1_frac=args.stage1_frac
     )
-    
-    # Post-training: generate order plot (if metadata present)
+
     evaluate_order_plot(
         pred_order, 
         preprocessing_info, 
@@ -235,7 +239,6 @@ def main():
         period_hours=args.period_hours
     )
 
-    # Evaluate on test set (predict + optional plotting)
     results_df = evaluate_test_set(
         model, 
         test_file, 
