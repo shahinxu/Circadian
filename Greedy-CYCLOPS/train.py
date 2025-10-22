@@ -198,7 +198,10 @@ def main():
     train_file = os.path.join(base_data, "expression.csv")
     test_file = os.path.join(base_data, "expression.csv")
     metadata = os.path.join(base_data, "metadata.csv")
-    save_dir = os.path.join("results", args.dataset_path)
+    # Append timestamp to save_dir to keep outputs from different runs separate
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y-%m-%dT%H_%M_%S")
+    save_dir = os.path.join("results", args.dataset_path, ts)
 
     torch.manual_seed(args.random_seed)
     np.random.seed(args.random_seed)

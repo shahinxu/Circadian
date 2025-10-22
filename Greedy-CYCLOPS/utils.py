@@ -293,20 +293,24 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     phase_rad = time_to_phase(phase_hours, period_hours=24.0)
     metadata_rad = time_to_phase(metadata_hours, period_hours=24.0)
 
-    try:
-        r = float(pearsonr(phase_rad, metadata_rad)[0])
-    except Exception:
-        r = float('nan')
-    try:
-        spearman_R = float(spearmanr(phase_rad, metadata_rad)[0])
-    except Exception:
-        spearman_R = float('nan')
+    r = float(pearsonr(phase_rad, metadata_rad)[0])
+    spearman_R = float(spearmanr(phase_rad, metadata_rad)[0])
     r2 = r * r if np.isfinite(r) else float('nan')
     aligned = phase_rad
 
     plt.figure(figsize=(8, 7))
-    plt.scatter(aligned, metadata_rad, s=12, alpha=0.8)
-    plt.grid(True, alpha=0.3, linestyle='--')
+    plt.grid(True, linestyle='-')
+    plt.scatter(aligned, metadata_rad, alpha=0.8, c='b')
+
+    two_pi = 2 * np.pi
+    ticks = [0, np.pi / 2, np.pi, 3 * np.pi / 2, two_pi]
+    tick_labels = ['0', r'$\frac{\pi}{2}$', r'$\pi$', r'$\frac{3\pi}{2}$', r'$2\pi$']
+    plt.xlim(0, two_pi)
+    plt.ylim(0, two_pi)
+    plt.xticks(ticks, tick_labels)
+    plt.yticks(ticks, tick_labels)
+    plt.tick_params(axis='both', which='major', labelsize=20)
+
     plt.tight_layout()
 
     out_path = os.path.join(out_dir, f'comparsion.png')
@@ -329,7 +333,7 @@ def _angle_diff(a, b):
 def rank_loss(pred, ranks, window=5):
     device = pred.device
     n = len(ranks)
-    order = torch.tensor(np.argsort(ranks), dtype=torch.long, device=device)  # shape (n,)
+    order = torch.tensor(np.argsort(ranks), dtype=torch.long, device=device)
     base_eps = (2 * math.pi) / n
     
     total_loss = 0.0
@@ -339,14 +343,11 @@ def rank_loss(pred, ranks, window=5):
         centers = order
         neighs = torch.roll(order, -k)
 
-        p_cent = pred[centers]  # (n,)
-        p_nei = pred[neighs]    # (n,)
+        p_cent = pred[centers]
+        p_nei = pred[neighs]
 
-        # 1. 计算这对 (i, i+k) 的实际角度差
         diffs = _angle_diff(p_nei, p_cent)
         
-        # 2. 计算这对 (i, i+k) 的 *目标* 角度差
-        # 目标差值是 k * base_eps
         target_diff = k * base_eps
         
         loss_k = 1.0 - torch.cos(diffs - target_diff)

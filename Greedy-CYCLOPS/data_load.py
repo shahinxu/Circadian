@@ -38,7 +38,10 @@ def mean_normalize(data):
     gene_means = np.mean(data, axis=0, keepdims=True)
     return (data - gene_means) / gene_means
 
-def load_and_preprocess_train_data(train_file, n_components=50, blunt_percent=0.975, do_mean_normalize=True, min_cv=0.14, max_cv=0.7, min_mean_rank=10000):
+def load_and_preprocess_train_data(
+        train_file, n_components=50, blunt_percent=0.975, 
+        do_mean_normalize=True, min_cv=0.14, 
+        max_cv=0.7, min_mean_rank=10000):
     print("=== Loading training data ===")
     df = pd.read_csv(train_file, low_memory=False)
     sample_columns = [col for col in df.columns if col != 'Gene_Symbol']
