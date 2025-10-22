@@ -208,16 +208,36 @@ def load_predictions_for_comparison(pred_csv: str) -> pd.DataFrame:
 
 
 def best_align_phase_for_comparison(
-    x_hours: np.ndarray,
-    y_hours: np.ndarray,
+    x_rad: np.ndarray,
+    y_rad: np.ndarray,
     step: float = 0.1,
-    period: float = 24.0,
 ) -> tuple[np.ndarray, float, float, float, float, bool]:
+    """
+    Align two phase sequences (both in radians, range [0, 2*pi)).
+
+    Parameters
+    - x_rad, y_rad: arrays of phases in radians (0..2*pi)
+    - step: alignment grid step in radians (default 0.1)
+
+    Returns (aligned_x_rad, r, r2, spearman_R, shift_rad, flipped)
+    """
     from scipy.stats import pearsonr, spearmanr
 
-    x_arr: np.ndarray = np.asarray(x_hours, dtype=float)
-    y_arr: np.ndarray = np.asarray(y_hours, dtype=float)
-    shifts: np.ndarray = np.arange(0.0, period, step, dtype=float)
+    x_arr: np.ndarray = np.asarray(x_rad, dtype=float)
+    y_arr: np.ndarray = np.asarray(y_rad, dtype=float)
+    two_pi = 2 * np.pi
+
+    # Validate inputs: expect radians in [0, 2*pi)
+    eps = 1e-8
+    if np.nanmax(x_arr) > two_pi + eps or np.nanmin(x_arr) < -eps:
+        raise ValueError("best_align_phase_for_comparison: x_rad appears not to be in radians in [0, 2*pi)")
+    if np.nanmax(y_arr) > two_pi + eps or np.nanmin(y_arr) < -eps:
+        raise ValueError("best_align_phase_for_comparison: y_rad appears not to be in radians in [0, 2*pi)")
+
+    # reduce to canonical [0, 2*pi)
+    x_arr = x_arr % two_pi
+    y_arr = y_arr % two_pi
+    shifts: np.ndarray = np.arange(0.0, two_pi, step, dtype=float)
 
     best_r = -np.inf
     best = {
@@ -230,9 +250,9 @@ def best_align_phase_for_comparison(
     }
 
     for flipped in (False, True):
-        x0: np.ndarray = (period - x_arr) % period if flipped else x_arr
+        x0: np.ndarray = (two_pi - x_arr) % two_pi if flipped else x_arr
         for s in shifts:
-            xs = (x0 + s) % 24.0
+            xs = (x0 + s) % two_pi
             xs_np = np.asarray(xs, dtype=float)
             y_np = y_arr
             try:
@@ -296,7 +316,10 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     r = float(pearsonr(phase_rad, metadata_rad)[0])
     spearman_R = float(spearmanr(phase_rad, metadata_rad)[0])
     r2 = r * r if np.isfinite(r) else float('nan')
-    aligned = phase_rad
+    # best_align_phase_for_comparison now expects radians input
+    aligned = best_align_phase_for_comparison(
+        phase_rad, metadata_rad, step=0.1
+    )[0]
 
     plt.figure(figsize=(8, 7))
     plt.grid(True, linestyle='-')

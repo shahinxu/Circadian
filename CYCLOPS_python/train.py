@@ -138,11 +138,10 @@ def main():
         save_dir=save_dir
     )
     
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 7))
     plt.plot(train_losses, label='Train Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.title('Training Progress')
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.savefig(os.path.join(save_dir, 'training_curves.png'), dpi=300, bbox_inches='tight')

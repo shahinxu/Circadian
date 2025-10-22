@@ -39,9 +39,14 @@ def mean_normalize(data):
     return (data - gene_means) / gene_means
 
 def load_and_preprocess_train_data(
-        train_file, n_components=50, blunt_percent=0.975, 
-        do_mean_normalize=True, min_cv=0.14, 
-        max_cv=0.7, min_mean_rank=10000):
+        train_file, 
+        n_components=50, 
+        blunt_percent=0.975, 
+        do_mean_normalize=True, 
+        min_cv=0.14, 
+        max_cv=0.7, 
+        min_mean_rank=10000
+    ):
     print("=== Loading training data ===")
     df = pd.read_csv(train_file, low_memory=False)
     sample_columns = [col for col in df.columns if col != 'Gene_Symbol']
@@ -58,15 +63,12 @@ def load_and_preprocess_train_data(
         expression_data = mean_normalize(expression_data)
     scaler = StandardScaler()
     expression_scaled = scaler.fit_transform(expression_data)
-    pca_components, pca_model, explained_variance = create_eigengenes(expression_scaled, n_components)
+    pca_components, pca_model, _ = create_eigengenes(expression_scaled, n_components)
     train_dataset = ExpressionDataset(pca_components)
     preprocessing_info = {
         'scaler': scaler,
         'pca_model': pca_model,
         'sample_columns': sample_columns,
-        'explained_variance': explained_variance,
-        'n_genes': expression_scaled.shape[1],
-        'n_samples': expression_scaled.shape[0],
         'n_components': n_components,
         'gene_keep_mask': keep,
         'do_mean_normalize': do_mean_normalize,

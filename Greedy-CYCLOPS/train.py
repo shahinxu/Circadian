@@ -186,7 +186,7 @@ def main():
     parser.add_argument("--num_epochs", type=int, default=2000)
     parser.add_argument("--stage1_frac", type=float, default=1)
     parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--lambda_recon", type=float, default=0.01)
+    parser.add_argument("--lambda_recon", type=float, default=0.1)
     parser.add_argument("--lambda_align", type=float, default=1)
     parser.add_argument("--period_hours", type=float, default=24.0)
     parser.add_argument("--dropout", type=float, default=0.2)
