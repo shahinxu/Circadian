@@ -14,7 +14,7 @@ __all__ = [
 
 def _ensure_finite(tensor: torch.Tensor, name: str) -> torch.Tensor:
     if torch.isnan(tensor).any() or torch.isinf(tensor).any():
-        raise ValueError(f"{name} 出现 NaN 或 Inf，请检查上游计算是否稳定")
+        raise ValueError(f"{name} contains NaN or Inf; check upstream computations for stability")
     return tensor
 
 
@@ -167,13 +167,13 @@ class SinkhornOrderingNet(nn.Module):
         seq_len = components.size(0)
         if seq_len == 0:
             raise ValueError("SinkhornOrderingNet requires at least one sample")
-        _ensure_finite(components, "输入组件")
+        _ensure_finite(components, "input components")
         embed = self.embed(components)
-        _ensure_finite(embed, "嵌入")
+        _ensure_finite(embed, "embedding")
         embed = self.dropout(embed)
-        embed = _ensure_finite(embed, "Sinkhorn 嵌入")
+        embed = _ensure_finite(embed, "Sinkhorn embedding")
         raw_scores = self.score_head(embed).squeeze(-1)
-        raw_scores = _ensure_finite(raw_scores, "Sinkhorn 排序得分")
+        raw_scores = _ensure_finite(raw_scores, "Sinkhorn ordering scores")
         raw_scores = raw_scores - raw_scores.mean()
 
         device = components.device
@@ -182,11 +182,11 @@ class SinkhornOrderingNet(nn.Module):
         logits = -((raw_scores.unsqueeze(-1) - positions.unsqueeze(0)) ** 2) / self.sinkhorn_tau
 
         perm_matrix = _sinkhorn(logits, n_iters=self.sinkhorn_iters)
-        perm_matrix = _ensure_finite(perm_matrix, "Sinkhorn 排列矩阵")
+        perm_matrix = _ensure_finite(perm_matrix, "Sinkhorn permutation matrix")
 
         positions_idx = torch.arange(seq_len, device=device, dtype=dtype)
         expected_ranks = perm_matrix.transpose(0, 1) @ positions_idx
-        expected_ranks = _ensure_finite(expected_ranks, "Sinkhorn 期望排序")
+        expected_ranks = _ensure_finite(expected_ranks, "Sinkhorn expected ranks")
 
         return {
             'perm_matrix': perm_matrix,

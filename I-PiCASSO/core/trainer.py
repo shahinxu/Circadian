@@ -88,7 +88,7 @@ class EndToEndTrainer:
                 n_bins=self.cfg.smooth_bins,
             )
             if torch.isnan(loss_smooth).any() or torch.isinf(loss_smooth).any():
-                raise ValueError("smoothness_loss 返回了 NaN/Inf，请检查排序输出")
+                raise ValueError("smoothness_loss returned NaN/Inf; check sorted outputs")
             total_loss = loss_smooth
 
             loss_recon = torch.zeros_like(loss_smooth)
@@ -97,11 +97,11 @@ class EndToEndTrainer:
                 target_components = components.detach()
                 loss_recon = F.mse_loss(reconstructed_original, target_components)
                 if torch.isnan(loss_recon).any() or torch.isinf(loss_recon).any():
-                    raise ValueError("重建loss出现NaN/Inf，训练中止")
+                    raise ValueError("Reconstruction loss returned NaN/Inf; aborting training")
                 total_loss = total_loss + self.cfg.reconstruction_weight * loss_recon
 
             if torch.isnan(total_loss).any() or torch.isinf(total_loss).any():
-                raise ValueError("总loss出现NaN/Inf，训练中止")
+                raise ValueError("Total loss returned NaN/Inf; aborting training")
 
             optimizer.zero_grad()
             total_loss.backward()

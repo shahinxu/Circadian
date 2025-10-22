@@ -62,17 +62,16 @@ def train_model(
     if 'train_has_time' not in preprocessing_info:
         sample = train_dataset[0]
         preprocessing_info['train_has_time'] = 'time' in sample
-    
+
     if 'train_has_celltype' not in preprocessing_info:
         sample = train_dataset[0]
         preprocessing_info['train_has_celltype'] = 'celltype' in sample
-    
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, 
-        mode='min', 
-        factor=0.5, 
+        optimizer,
+        mode='min',
+        factor=0.5,
         patience=100
     )
     recon_criterion = nn.MSELoss()
