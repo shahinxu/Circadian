@@ -321,9 +321,6 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     tick_labels = ['0', r'$\frac{\pi}{2}$', r'$\pi$', r'$\frac{3\pi}{2}$', r'$2\pi$']
     plt.xlim(0, two_pi)
     plt.ylim(0, two_pi)
-    # plt.xticks(ticks, tick_labels)
-    # plt.yticks(ticks, tick_labels)
-    # plt.tick_params(axis='both', which='major', labelsize=20)
     plt.xlabel('Collection Phase', fontsize=24)
     plt.ylabel('Predicted Phase', fontsize=24)
 
@@ -333,7 +330,7 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close()
 
-    print(f"Pearson R={r:.2f}, R²={r2:.2f}, Spearman ρ={spearman_R:.2f}")
+    print(f"Pearson R={r:.2f}, Spearman ρ={spearman_R:.2f}")
     print(f"plot saved in: {out_path}")
 
     return out_path, r, r2, spearman_R
@@ -345,7 +342,7 @@ def _angle_diff(a, b):
     diff = torch.remainder(a - b + math.pi, two_pi) - math.pi
     return diff
 
-def rank_loss(pred, ranks, window=5):
+def rank_loss(pred, ranks, window=3):
     device = pred.device
     n = len(ranks)
     order = torch.tensor(np.argsort(ranks), dtype=torch.long, device=device)

@@ -216,7 +216,7 @@ def main():
     preprocessing_info['period_hours'] = args.period_hours
 
     model = PhaseAutoEncoder(
-        input_dim=args.n_components,
+        input_dim=preprocessing_info['n_components'],
         dropout=args.dropout
     )
 
