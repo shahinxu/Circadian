@@ -212,15 +212,6 @@ def best_align_phase_for_comparison(
     y_rad: np.ndarray,
     step: float = 0.1,
 ) -> tuple[np.ndarray, float, float, float, float, bool]:
-    """
-    Align two phase sequences (both in radians, range [0, 2*pi)).
-
-    Parameters
-    - x_rad, y_rad: arrays of phases in radians (0..2*pi)
-    - step: alignment grid step in radians (default 0.1)
-
-    Returns (aligned_x_rad, r, r2, spearman_R, shift_rad, flipped)
-    """
     from scipy.stats import pearsonr, spearmanr
 
     x_arr: np.ndarray = np.asarray(x_rad, dtype=float)
@@ -313,35 +304,36 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     phase_rad = time_to_phase(phase_hours, period_hours=24.0)
     metadata_rad = time_to_phase(metadata_hours, period_hours=24.0)
 
-    r = float(pearsonr(phase_rad, metadata_rad)[0])
-    spearman_R = float(spearmanr(phase_rad, metadata_rad)[0])
-    r2 = r * r if np.isfinite(r) else float('nan')
-    # best_align_phase_for_comparison now expects radians input
-    aligned = best_align_phase_for_comparison(
+    aligned_rad = best_align_phase_for_comparison(
         phase_rad, metadata_rad, step=0.1
     )[0]
 
+    r = float(pearsonr(aligned_rad, metadata_rad)[0])
+    spearman_R = float(spearmanr(aligned_rad, metadata_rad)[0])
+    r2 = r * r if np.isfinite(r) else float('nan')
+
     plt.figure(figsize=(8, 7))
     plt.grid(True, linestyle='-')
-    plt.scatter(aligned, metadata_rad, alpha=0.8, c='b')
+    plt.scatter(aligned_rad, metadata_rad, c='b')
 
     two_pi = 2 * np.pi
     ticks = [0, np.pi / 2, np.pi, 3 * np.pi / 2, two_pi]
     tick_labels = ['0', r'$\frac{\pi}{2}$', r'$\pi$', r'$\frac{3\pi}{2}$', r'$2\pi$']
     plt.xlim(0, two_pi)
     plt.ylim(0, two_pi)
-    plt.xticks(ticks, tick_labels)
-    plt.yticks(ticks, tick_labels)
-    plt.tick_params(axis='both', which='major', labelsize=20)
+    # plt.xticks(ticks, tick_labels)
+    # plt.yticks(ticks, tick_labels)
+    # plt.tick_params(axis='both', which='major', labelsize=20)
+    plt.xlabel('Collection Phase', fontsize=24)
+    plt.ylabel('Predicted Phase', fontsize=24)
 
     plt.tight_layout()
 
     out_path = os.path.join(out_dir, f'comparsion.png')
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close()
-    print(f'Saved: {out_path}')
 
-    print(f"overall metrics: R={r:.3f}, R²={r2:.3f}, Spearman ρ={spearman_R:.3f}")
+    print(f"Pearson R={r:.2f}, R²={r2:.2f}, Spearman ρ={spearman_R:.2f}")
     print(f"plot saved in: {out_path}")
 
     return out_path, r, r2, spearman_R

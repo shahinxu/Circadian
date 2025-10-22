@@ -37,7 +37,7 @@ time_radian = (np.array(time_hours) % 24) * 2 * np.pi / 24
 
 plt.figure(figsize=(8, 7))
 plt.scatter(time_radian, phases, c='b', label='Phase vs. Time')
-plt.xlabel('Collection Time', fontsize=24)
+plt.xlabel('Collection Phase', fontsize=24)
 plt.ylabel('Predicted Phase', fontsize=24)
 plt.tight_layout()
 plt.savefig(os.path.join(base_path, "phase_vs_time.png"), dpi=150)

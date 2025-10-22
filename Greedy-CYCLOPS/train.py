@@ -14,6 +14,7 @@ from AE import PhaseAutoEncoder
 from data_load import load_and_preprocess_train_data, load_and_preprocess_test_data
 from torch.utils.data import DataLoader
 from utils import predict_and_save_phases
+from datetime import datetime
 
 def greedy_ordering(components: np.ndarray):
     n = components.shape[0]
@@ -104,11 +105,11 @@ def train_model(
         optimizer.step()
         train_losses.append(total.item())
         scheduler.step(total.item())
-        if epoch % 10 == 0:
+        if epoch % 50 == 0:
             print(f"Epoch {epoch+1}/{stage1_epochs}, "
-                    f"Recon Loss: {recon_loss.item():.4f}, "
-                    f"Align Loss: {a_loss.item():.4f}, "
-                    f"Total Loss: {total.item():.4f}")
+                    f"Recon Loss: {recon_loss.item():.2f}, "
+                    f"Align Loss: {a_loss.item():.2f}, "
+                    f"Total Loss: {total.item():.2f}")
 
     for epoch in range(stage2_epochs):
         model.train()
@@ -183,10 +184,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", required=True)
     parser.add_argument("--n_components", type=int, default=5)
-    parser.add_argument("--num_epochs", type=int, default=2000)
+    parser.add_argument("--num_epochs", type=int, default=200)
     parser.add_argument("--stage1_frac", type=float, default=1)
     parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--lambda_recon", type=float, default=0.1)
+    parser.add_argument("--lambda_recon", type=float, default=0.01)
     parser.add_argument("--lambda_align", type=float, default=1)
     parser.add_argument("--period_hours", type=float, default=24.0)
     parser.add_argument("--dropout", type=float, default=0.2)
@@ -198,8 +199,6 @@ def main():
     train_file = os.path.join(base_data, "expression.csv")
     test_file = os.path.join(base_data, "expression.csv")
     metadata = os.path.join(base_data, "metadata.csv")
-    # Append timestamp to save_dir to keep outputs from different runs separate
-    from datetime import datetime
     ts = datetime.now().strftime("%Y-%m-%dT%H_%M_%S")
     save_dir = os.path.join("results", args.dataset_path, ts)
 
