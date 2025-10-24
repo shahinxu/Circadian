@@ -314,11 +314,9 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
 
     plt.figure(figsize=(8, 7))
     plt.grid(True, linestyle='-')
-    plt.scatter(aligned_rad, metadata_rad, c='b')
+    plt.scatter(metadata_rad, aligned_rad, c='b')
 
     two_pi = 2 * np.pi
-    ticks = [0, np.pi / 2, np.pi, 3 * np.pi / 2, two_pi]
-    tick_labels = ['0', r'$\frac{\pi}{2}$', r'$\pi$', r'$\frac{3\pi}{2}$', r'$2\pi$']
     plt.xlim(0, two_pi)
     plt.ylim(0, two_pi)
     plt.xlabel('Collection Phase', fontsize=24)
