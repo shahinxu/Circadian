@@ -5,7 +5,7 @@
 
 suppressPackageStartupMessages({
   if (!requireNamespace('optparse', quietly = TRUE)) stop('Please install the R package optparse to run this script')
-  if (!requireNamespace('zeitzeiger', quietly = TRUE)) stop('Please install the R package zeitzeiger before running this script')
+  if (!requireNamespace('zeitzeiger', quietly = TRUE)) stop('Please install the R package zeitzeiger before running this script') # nolint
   library(optparse)
   library(zeitzeiger)
 })
@@ -71,8 +71,8 @@ read_expression <- function(path) {
   } else {
     # ambiguous: decide by checking if other columns look numeric or sample-like
     # If majority of columns (except first) are numeric, treat first as gene
-    numeric_counts <- sapply(df[,-1, drop=FALSE], function(x) sum(!is.na(as.numeric(as.character(x)))))
-    if (mean(numeric_counts) > 0) {
+    numeric_counts <- if (ncol(df) > 1) sapply(df[,-1, drop=FALSE], function(x) sum(!is.na(suppressWarnings(as.numeric(as.character(x)))))) else numeric(0)
+    if (length(numeric_counts) > 0 && mean(numeric_counts) > 0) {
       genes <- df[[1]]
       mat <- as.matrix(df[,-1, drop=FALSE])
       rownames(mat) <- genes
@@ -119,8 +119,10 @@ normalize_time <- function(vec, format = 'auto') {
   # vec could be numeric or character
   if (is.character(vec)) vec <- as.numeric(vec)
   if (format == 'auto') {
-    if (max(vec, na.rm = TRUE) <= 1) format <- 'normalized'
-    else if (max(vec, na.rm = TRUE) > 2*pi - 0.1) format <- 'radians'
+    # infer: <=1 => normalized; <=2*pi+eps => radians; else hours
+    mx <- max(vec, na.rm = TRUE)
+    if (mx <= 1) format <- 'normalized'
+    else if (mx <= (2*pi + 0.1)) format <- 'radians'
     else format <- 'hours'
   }
   if (format == 'normalized') return(vec)
@@ -145,43 +147,76 @@ vcat('Reading expression:', opt$expr)
 expr_mat <- read_expression(opt$expr)
 meta <- read_metadata(opt$meta)
 
-if (!is.null(opt$`expr-test`) && !is.null(opt$`meta-test`)) {
+# --- In-memory preprocessing (do NOT modify or write CSVs) ---
+# Ensure there is a lowercase 'sample' column and a numeric normalized 'time' column (0-1)
+sample_col_opt <- if (!is.null(opt$sample_col)) opt$sample_col else opt[['sample-col']]
+time_col_opt <- if (!is.null(opt$time_col)) opt$time_col else opt[['time-col']]
+
+# create 'sample' column in memory
+if (sample_col_opt %in% colnames(meta)) {
+  meta$sample <- meta[[sample_col_opt]]
+} else if ('Sample' %in% colnames(meta)) {
+  meta$sample <- meta[['Sample']]
+} else if ('sample' %in% colnames(meta)) {
+  meta$sample <- meta[['sample']]
+} else {
+  # try rownames
+  if (!is.null(rownames(meta))) meta$sample <- rownames(meta)
+}
+
+# create 'time' column in memory: prefer user-specified time col, else common names
+time_vec <- NULL
+if (!is.null(time_col_opt) && time_col_opt %in% colnames(meta)) time_vec <- suppressWarnings(as.numeric(meta[[time_col_opt]]))
+if (is.null(time_vec) || all(is.na(time_vec))) {
+  for (cname in c('Time_Phase','Hour_in_24','Time_Hours','time','Time')) {
+    if (cname %in% colnames(meta)) {
+      time_vec <- suppressWarnings(as.numeric(meta[[cname]]))
+      if (!all(is.na(time_vec))) break
+    }
+  }
+}
+if (is.null(time_vec) || all(is.na(time_vec))) stop('Could not determine a numeric time column in metadata; please specify --time-col')
+# normalize
+meta$time <- normalize_time(time_vec, opt[['time-format']])
+# done preprocessing
+
+if (!is.null(opt[['expr-test']]) && !is.null(opt[['meta-test']])) {
   vcat('Using separate train/test files')
   expr_mat_train <- read_expression(opt$expr)
   meta_train <- meta
-  expr_mat_test <- read_expression(opt$`expr-test`)
-  meta_test <- read_metadata(opt$`meta-test`)
+  expr_mat_test <- read_expression(opt[['expr-test']])
+  meta_test <- read_metadata(opt[['meta-test']])
   # align separately
-  mat_train <- align_expr_meta(expr_mat_train, meta_train, opt$`sample-col`)
-  mat_test <- align_expr_meta(expr_mat_test, meta_test, opt$`sample-col`)
-  time_train_raw <- meta_train[[opt$`time-col"]]
-  time_test_raw <- meta_test[[opt$`time-col"]]
-  time_format <- opt$`time-format`
+  mat_train <- align_expr_meta(expr_mat_train, meta_train, opt[['sample-col']])
+  mat_test <- align_expr_meta(expr_mat_test, meta_test, opt[['sample-col']])
+  time_train_raw <- suppressWarnings(as.numeric(meta_train[[opt[['time-col']]]]))
+  time_test_raw <- suppressWarnings(as.numeric(meta_test[[opt[['time-col']]]]))
+  time_format <- opt[['time-format']]
   timeTrain <- normalize_time(time_train_raw, time_format)
   timeTest <- normalize_time(time_test_raw, time_format)
 } else {
   vcat('Single dataset provided; will split into train/test')
   # align full matrix to metadata
-  mat_all <- align_expr_meta(expr_mat, meta, opt$`sample-col`)
+  mat_all <- align_expr_meta(expr_mat, meta, opt[['sample-col']])
   set.seed(opt$seed)
   n <- nrow(mat_all)
-  ntrain <- max(1, floor(opt$`split-fraction` * n))
+  ntrain <- max(1, floor(opt[['split-fraction']] * n))
   train_idx <- sample(seq_len(n), size = ntrain)
   mat_train <- mat_all[train_idx, , drop = FALSE]
   mat_test <- mat_all[-train_idx, , drop = FALSE]
   meta_train <- meta[train_idx, , drop = FALSE]
   meta_test <- meta[-train_idx, , drop = FALSE]
-  time_format <- opt$`time-format`
-  timeTrain <- normalize_time(meta_train[[opt$`time-col`]], time_format)
-  timeTest <- normalize_time(meta_test[[opt$`time-col`]], time_format)
+  time_format <- opt[['time-format']]
+  timeTrain <- normalize_time(suppressWarnings(as.numeric(meta_train$time)), time_format)
+  timeTest <- normalize_time(suppressWarnings(as.numeric(meta_test$time)), time_format)
 }
 
 vcat('Train samples:', nrow(mat_train), 'Test samples:', nrow(mat_test))
 
 ## optional feature selection: top variable genes
-if (opt$`top-genes` > 0) {
+if (opt[['top-genes']] > 0) {
   v <- apply(t(mat_train), 2, var, na.rm = TRUE)
-  topg <- names(sort(v, decreasing = TRUE))[seq_len(min(opt$`top-genes`, length(v)))]
+  topg <- names(sort(v, decreasing = TRUE))[seq_len(min(opt[['top-genes']], length(v)))]
   vcat('Selecting top', length(topg), 'genes by variance')
   mat_train <- mat_train[, topg, drop = FALSE]
   mat_test <- mat_test[, topg, drop = FALSE]
@@ -191,14 +226,14 @@ if (opt$`top-genes` > 0) {
 vcat('Fitting zeitzeiger...')
 vcat('Using wrapper zeitzeiger()')
 res <- zeitzeiger(xTrain = mat_train, timeTrain = timeTrain, xTest = mat_test,
-                  nKnots = opt$nknots, nTime = opt$ntime, useSpc = TRUE,
-                  sumabsv = opt$sumabsv, nSpc = opt$nspc)
+                  nKnots = opt[['nknots']], nTime = opt[['ntime']], useSpc = TRUE,
+                  sumabsv = opt[['sumabsv']], nSpc = opt[['nspc']])
 
 timePred_norm <- res$predResult$timePred[,1]
 timePred_hours <- timePred_norm * 24
 
 # true times in hours
-trueTest_norm <- normalize_time(meta_test[[opt$`time-col`]], time_format)
+trueTest_norm <- normalize_time(suppressWarnings(as.numeric(meta_test$time)), time_format)
 trueTest_hours <- trueTest_norm * 24
 
 errs <- circle_diff_hours(timePred_hours, trueTest_hours)
@@ -211,12 +246,12 @@ pred_df <- data.frame(sample = rownames(mat_test),
                       error_hours = errs,
                       abs_error_hours = abs(errs), stringsAsFactors = FALSE)
 
-out_csv <- paste0(opt$`out-prefix`, '.predictions.csv')
+out_csv <- paste0(opt[['out-prefix']], '.predictions.csv')
 write.csv(pred_df, out_csv, row.names = FALSE)
 vcat('Wrote predictions to', out_csv)
 
-if (opt$`save-model`) {
-  out_rds <- paste0(opt$`out-prefix`, '.model.rds')
+if (opt[['save-model']]) {
+  out_rds <- paste0(opt[['out-prefix']], '.model.rds')
   saveRDS(list(res = res), out_rds)
   vcat('Saved model to', out_rds)
 }
@@ -229,6 +264,6 @@ vcat(sprintf('Median absolute circular error (hours): %.3f', median_abs))
 
 cat('Done. Outputs:\n')
 cat(' - Predictions:', out_csv, '\n')
-if (opt$`save-model`) cat(' - Model RDS:', out_rds, '\n')
+if (opt[['save-model']]) cat(' - Model RDS:', out_rds, '\n')
 
 invisible(NULL)
