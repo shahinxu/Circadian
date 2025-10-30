@@ -95,6 +95,13 @@ def main():
         meta_sub = meta_sub.set_index(sample_col).loc[expr_sub.columns].reset_index()
 
         exprs.append(expr_sub)
+        # normalize sample column name to 'Sample' for downstream consistency
+        if sample_col != 'Sample':
+            if sample_col in meta_sub.columns:
+                meta_sub = meta_sub.rename(columns={sample_col: 'Sample'})
+            else:
+                # fallback: create 'Sample' from the current index that was reset
+                meta_sub['Sample'] = meta_sub.iloc[:,0].astype(str)
         # add a tissue_source column for traceability
         meta_sub['tissue_source'] = t.name
         metas.append(meta_sub)
@@ -123,6 +130,16 @@ def main():
 
     # concatenate metadata (they already are filtered to the samples that appear in expr)
     combined_meta = pd.concat(metas, axis=0, ignore_index=True)
+
+    # normalize sample column name in the final combined metadata to 'Sample'
+    for alt in ('Sample', 'sample', 'SampleID', 'sample_id', 'sampleId'):
+        if alt in combined_meta.columns:
+            if alt != 'Sample':
+                combined_meta = combined_meta.rename(columns={alt: 'Sample'})
+            break
+    if 'Sample' not in combined_meta.columns:
+        # fallback: assume the first column is the sample identifier
+        combined_meta['Sample'] = combined_meta.iloc[:, 0].astype(str)
 
     out_expr = Path(f"{args.out_prefix}.expression.csv")
     out_meta = Path(f"{args.out_prefix}.metadata.csv")
