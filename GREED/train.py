@@ -9,7 +9,6 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import argparse
 import os
-from utils import rank_loss
 from AE import PhaseAutoEncoder
 from data_load import load_and_preprocess_train_data, load_and_preprocess_test_data
 from torch.utils.data import DataLoader
@@ -34,6 +33,16 @@ def greedy_ordering(components: np.ndarray):
         cur = nxt
     return np.array(order, dtype=int)
 
+
+def sinusoidal_positional_encoding(positions: np.ndarray, d_model: int):
+    n = positions.shape[0]
+    pe = np.zeros((n, d_model), dtype=np.float32)
+    position = positions[:, np.newaxis]
+    div_term = np.exp(np.arange(0, d_model, 2) * -(np.log(10000.0) / d_model))
+    pe[:, 0::2] = np.sin(position * div_term)
+    pe[:, 1::2] = np.cos(position * div_term)
+    return pe
+
 def plot_components_by_phase(components, phases, save_path, n_plot=None):
     order = np.argsort(phases)
     phases_sorted = phases[order]
@@ -56,16 +65,8 @@ def plot_components_by_phase(components, phases, save_path, n_plot=None):
 def train_model(
     model: PhaseAutoEncoder, train_dataset, preprocessing_info,
     num_epochs=100, lr=1e-3, device='cuda',
-    lambda_recon=0.2, lambda_time=0.0, lambda_align=1.0,
-    save_dir='./model_checkpoints', stage1_frac=0.8):
-
-    if 'train_has_time' not in preprocessing_info:
-        sample = train_dataset[0]
-        preprocessing_info['train_has_time'] = 'time' in sample
-
-    if 'train_has_celltype' not in preprocessing_info:
-        sample = train_dataset[0]
-        preprocessing_info['train_has_celltype'] = 'celltype' in sample
+    lambda_recon=0.2,
+    save_dir='./model_checkpoints'):
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -88,29 +89,17 @@ def train_model(
     order = greedy_ordering(components)
     ranks = np.empty(n_samples, dtype=np.int64)
     ranks[order] = np.arange(n_samples)
-    X = expressions_tensor
+    X = expressions_tensor[order]
 
-    stage1_epochs = int(num_epochs * stage1_frac)
-    stage2_epochs = num_epochs - stage1_epochs
+    pe = sinusoidal_positional_encoding(
+        ranks.astype(np.int64), 
+        d_model=preprocessing_info['n_components']
+    )
+    pe_tensor = torch.from_numpy(pe).to(device)
+    pe_ordered = pe_tensor[order]
+    X = X + pe_ordered
 
-    for epoch in range(stage1_epochs):
-        model.train()
-        optimizer.zero_grad()
-        _, pred_phases, recon = model(X)
-        recon_loss = recon_criterion(recon, X)
-        a_loss = rank_loss(pred_phases, ranks, window=5)
-        total = lambda_recon * recon_loss + lambda_align * a_loss
-        total.backward()
-        optimizer.step()
-        train_losses.append(total.item())
-        scheduler.step(total.item())
-        if epoch % 50 == 0:
-            print(f"Epoch {epoch+1}/{stage1_epochs}, "
-                    f"Recon Loss: {recon_loss.item():.2f}, "
-                    f"Align Loss: {a_loss.item():.2f}, "
-                    f"Total Loss: {total.item():.2f}")
-
-    for epoch in range(stage2_epochs):
+    for epoch in range(num_epochs):
         model.train()
         optimizer.zero_grad()
         _, pred_phases, recon = model(X)
@@ -120,11 +109,17 @@ def train_model(
         optimizer.step()
         train_losses.append(total.item())
         scheduler.step(total.item())
+        if epoch % 50 == 0:
+            print(f"Epoch {epoch+1}/{num_epochs}, "
+                  f"Recon Loss: {recon_loss.item():.2f}")
 
     model.eval()
     with torch.no_grad():
         _, pred_phases, recon = model(X)
-    return model, order
+    pred_phases_np = pred_phases.detach().cpu().numpy()
+    pred_order_over_reordered = np.argsort(pred_phases_np)
+    pred_order_original = order[pred_order_over_reordered]
+    return model, pred_order_original
 
 
 def evaluate_order_plot(
@@ -184,10 +179,8 @@ def main():
     parser.add_argument("--dataset_path", required=True)
     parser.add_argument("--n_components", type=int, default=5)
     parser.add_argument("--num_epochs", type=int, default=200)
-    parser.add_argument("--stage1_frac", type=float, default=1)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--lambda_recon", type=float, default=0.01)
-    parser.add_argument("--lambda_align", type=float, default=1)
     parser.add_argument("--period_hours", type=float, default=24.0)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--device", default='cuda')
@@ -196,7 +189,6 @@ def main():
 
     base_data = f"../data/{args.dataset_path}"
     train_file = os.path.join(base_data, "expression.csv")
-    test_file = os.path.join(base_data, "expression.csv")
     metadata = os.path.join(base_data, "metadata.csv")
     ts = datetime.now().strftime("%Y-%m-%dT%H_%M_%S")
     save_dir = os.path.join("results", args.dataset_path, ts)
@@ -227,9 +219,7 @@ def main():
         lr=args.lr,
         device=args.device,
         lambda_recon=args.lambda_recon,
-        lambda_align=args.lambda_align,
         save_dir=save_dir,
-        stage1_frac=args.stage1_frac
     )
 
     evaluate_order_plot(
@@ -240,16 +230,7 @@ def main():
         period_hours=args.period_hours
     )
 
-    results_df = evaluate_test_set(
-        model, 
-        test_file, 
-        preprocessing_info, 
-        save_dir, 
-        device=args.device, 
-        metadata_path=metadata
-    )
-    if results_df is None and not os.path.isfile(test_file):
-        print("Training completed. No test file provided, so no predictions made.")
+    print("Training completed. Final ordering obtained from last epoch.")
 
 
 if __name__ == '__main__':
