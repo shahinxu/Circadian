@@ -185,45 +185,26 @@ def load_and_preprocess_test_data(test_file, preprocessing_info):
     df = pd.read_csv(test_file, low_memory=False)
     sample_columns = preprocessing_info['sample_columns']
     available_sample_columns = [col for col in sample_columns if col in df.columns]
-    if len(available_sample_columns) != len(sample_columns):
-        print(f"Warning: Test file is missing some sample columns defined during training.")
-
     gene_df = df[~df['Gene_Symbol'].isin(['time_C'])].copy()
-
     final_gene_symbols = preprocessing_info['final_gene_symbols']
+    if gene_df['Gene_Symbol'].duplicated().any():
+        agg_cols = [c for c in available_sample_columns if c in gene_df.columns]
+        grouped = gene_df.groupby('Gene_Symbol', as_index=False)[agg_cols].mean()
+        gene_df = grouped
+
     gene_df_indexed = gene_df.set_index('Gene_Symbol').reindex(final_gene_symbols)
     test_expression_data = gene_df_indexed[available_sample_columns].values.T
 
     if np.isnan(test_expression_data).any():
-        print("Warning: Missing gene values detected in test set after reindexing. Imputing with 0 before scaling.")
         test_expression_data = np.nan_to_num(test_expression_data, nan=0.0)
-
-    print(f"Aligned test data shape before processing: {test_expression_data.shape}")
-    if test_expression_data.shape[1] != len(final_gene_symbols):
-         print(f"Warning: Shape mismatch after gene alignment. Expected {len(final_gene_symbols)} genes, got {test_expression_data.shape[1]}")
 
     test_expression_data = blunt_percentile(test_expression_data, percent=preprocessing_info['blunt_percent'])
 
     scaler = preprocessing_info['scaler']
-    try:
-        test_expression_scaled = scaler.transform(test_expression_data)
-    except ValueError as e:
-         print(f"Error during scaling test data: {e}")
-         print(f"Test data shape: {test_expression_data.shape}, Scaler expected features: {scaler.n_features_in_}")
-         raise
-
+    test_expression_scaled = scaler.transform(test_expression_data)
     pca_model = preprocessing_info['pca_model']
     actual_n_components = preprocessing_info['n_components']
-
-    if test_expression_scaled.shape[1] != pca_model.n_features_in_:
-         raise ValueError(f"Number of features in scaled test data ({test_expression_scaled.shape[1]}) does not match PCA model expected input features ({pca_model.n_features_in_})")
-
-    try:
-        test_pca_components = pca_model.transform(test_expression_scaled)
-    except Exception as e:
-        print(f"Error during PCA transform on test data: {e}")
-        print(f"Scaled test data shape: {test_expression_scaled.shape}")
-        raise
+    test_pca_components = pca_model.transform(test_expression_scaled)
 
     print(f"Test data after PCA shape: {test_pca_components.shape}")
     print(f"Expected n_components: {actual_n_components}")

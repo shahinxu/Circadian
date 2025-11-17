@@ -11,9 +11,13 @@ class PhaseAutoEncoder(nn.Module):
     def __init__(self, input_dim, dropout=0.0):
         super(PhaseAutoEncoder, self).__init__()
         self.input_dim = input_dim
-        # transformer that treats each sample as a token in a sequence
-        # d_model equals the PCA dimensionality so transformer input/output sizes match
-        transformer_layer = nn.TransformerEncoderLayer(d_model=input_dim, nhead=4, dim_feedforward=128, dropout=dropout, batch_first=False)
+        transformer_layer = nn.TransformerEncoderLayer(
+            d_model=input_dim, 
+            nhead=1, 
+            dim_feedforward=128, 
+            dropout=dropout, 
+            batch_first=False
+        )
         self.transformer = nn.TransformerEncoder(transformer_layer, num_layers=2)
 
         self.encoder = nn.Linear(input_dim, 2)
@@ -22,11 +26,9 @@ class PhaseAutoEncoder(nn.Module):
 
     def encode(self, x):
         x = self.dropout(x)
-        # transformer expects input shape (seq_len, batch, embed_dim)
-        # here we treat the whole dataset as a single "sentence" so batch=1
-        seq = x.unsqueeze(1)  # (seq_len, 1, input_dim)
-        trans_out = self.transformer(seq)  # (seq_len, 1, input_dim)
-        trans_out = trans_out.squeeze(1)  # (seq_len, input_dim)
+        seq = x.unsqueeze(1)
+        trans_out = self.transformer(seq)
+        trans_out = trans_out.squeeze(1)
         phase_coords = self.encoder(trans_out)
         phase_coords_normalized = circular_node(phase_coords)
         phase_angles = torch.atan2(phase_coords_normalized[:, 1], phase_coords_normalized[:, 0])

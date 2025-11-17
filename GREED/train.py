@@ -40,7 +40,9 @@ def sinusoidal_positional_encoding(positions: np.ndarray, d_model: int):
     position = positions[:, np.newaxis]
     div_term = np.exp(np.arange(0, d_model, 2) * -(np.log(10000.0) / d_model))
     pe[:, 0::2] = np.sin(position * div_term)
-    pe[:, 1::2] = np.cos(position * div_term)
+    cos_len = pe[:, 1::2].shape[1]
+    if cos_len > 0:
+        pe[:, 1::2] = np.cos(position * div_term[:cos_len])
     return pe
 
 def plot_components_by_phase(components, phases, save_path, n_plot=None):
@@ -228,6 +230,15 @@ def main():
         metadata, 
         save_dir, 
         period_hours=args.period_hours
+    )
+    print("Generating final predictions and comparison plot in main save_dir...")
+    evaluate_test_set(
+        model=model,
+        test_file=train_file,
+        preprocessing_info=preprocessing_info,
+        save_dir=save_dir,
+        device=args.device,
+        metadata_path=metadata
     )
 
     print("Training completed. Final ordering obtained from last epoch.")
