@@ -1,32 +1,25 @@
 #!/usr/bin/env python3
 """
-Batch-plot predicted phase vs true collection time for all prediction CSVs in a folder.
-
-Saves one PNG per predictions CSV with both axes fixed to [0, 2*pi].
+Batch-plot predicted phase vs true collection time for all prediction CSVs.
 
 Usage:
-  python Zeitzeiger/plot_all_results.py --results-dir /path/to/results --out-dir /path/to/out --ext .predictions.csv
-
-If --out-dir is omitted the PNGs are written next to the CSVs.
+  python plot_all_results.py --results-dir ./results --out-dir ./plots
 """
 import argparse
 import math
 import os
 import sys
 from glob import glob
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 
 def find_prediction_files(results_dir, ext='.predictions.csv'):
-    pattern = os.path.join(results_dir, f'*{ext}')
-    return sorted(glob(pattern))
+    return sorted(glob(os.path.join(results_dir, f'*{ext}')))
 
 
 def detect_columns(df):
-    # sample is not used here, predictions CSV contains true_time and pred columns
     pred_col = None
     if 'pred_time_norm' in df.columns:
         pred_col = ('pred_time_norm', 'norm')
@@ -37,49 +30,29 @@ def detect_columns(df):
             if c.startswith('Phases_AG'):
                 pred_col = (c, 'radians')
                 break
-    # true time
+    
     true_col = None
-    for cand in ['true_time_hours', 'true_time', 'true_time_norm', 'true_time_radians', 'true_time_hours']:
+    for cand in ['true_time_hours', 'true_time', 'true_time_norm', 'true_time_radians']:
         if cand in df.columns:
             true_col = cand
             break
-    # fallback: try columns that look like hours
-    if true_col is None:
-        for c in df.columns:
-            if 'true' in c.lower() and 'hour' in c.lower():
-                true_col = c
-                break
-    if true_col is None:
-        # last resort: pick the first numeric column that is not the pred column
-        for c in df.columns:
-            if c == pred_col[0] if pred_col else False:
-                continue
-            try:
-                vals = pd.to_numeric(df[c], errors='coerce')
-                if vals.notnull().sum() > 0:
-                    true_col = c
-                    break
-            except Exception:
-                continue
+    
     return pred_col, true_col
 
 
-def to_radians_from_norm(x):
-    return (np.array(x, dtype=float) % 1.0) * 2 * math.pi
-
-
-def to_radians_from_hours(x):
-    return (np.array(x, dtype=float) % 24.0) * 2 * math.pi / 24.0
-
-
-def to_radians_from_radians(x):
-    return (np.array(x, dtype=float) % (2 * math.pi))
+def to_radians(x, from_format):
+    x = np.array(x, dtype=float)
+    if from_format == 'norm':
+        return (x % 1.0) * 2 * math.pi
+    elif from_format == 'hours':
+        return (x % 24.0) * 2 * math.pi / 24.0
+    else:
+        return x % (2 * math.pi)
 
 
 def plot_pair(true_rad, pred_rad, out_path, tissue=None):
-    # Match the style exactly as requested
     plt.figure(figsize=(8, 7))
-    plt.scatter(true_rad, pred_rad, c='black', label='Phase vs. Time')
+    plt.scatter(true_rad, pred_rad, c='black')
     plt.xlabel('Collection Phase', fontsize=24)
     plt.ylabel('Predicted Phase', fontsize=24)
     plt.xlim(0, 2 * math.pi)
@@ -87,85 +60,54 @@ def plot_pair(true_rad, pred_rad, out_path, tissue=None):
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(out_path, dpi=150)
-    plt.show()
     plt.close()
-    # print message in Chinese as in the requested style
-    if tissue is None:
-        tissue = os.path.splitext(os.path.basename(out_path))[0]
-    print(f'已保存图片 {tissue}_phase_vs_time.png')
+    print(f'Saved: {out_path}')
 
 
 def process_file(pred_path, out_dir=None):
     df = pd.read_csv(pred_path)
     pred_col_info, true_col = detect_columns(df)
-    if pred_col_info is None:
-        print(f'Could not find a prediction column in {pred_path}, skipping', file=sys.stderr)
+    
+    if pred_col_info is None or true_col is None:
+        print(f'Skipping {pred_path}: missing required columns', file=sys.stderr)
         return False
+    
     pred_col, pred_type = pred_col_info
-
-    if true_col is None:
-        print(f'Could not find a true-time column in {pred_path}, skipping', file=sys.stderr)
-        return False
-
-    # Extract arrays
-    pred_vals = df[pred_col].values
-    true_vals = df[true_col].values
-
-    # Convert
-    if pred_type == 'norm':
-        pred_rad = to_radians_from_norm(pred_vals)
-    elif pred_type == 'hours':
-        pred_rad = to_radians_from_hours(pred_vals)
-    else:  # radians
-        pred_rad = to_radians_from_radians(pred_vals)
-
-    # true: guess mapping
-    true_arr = np.array(true_vals, dtype=float)
+    pred_rad = to_radians(df[pred_col].values, pred_type)
+    
+    true_arr = np.array(df[true_col].values, dtype=float)
     if true_arr.max() <= 1.0:
-        true_rad = to_radians_from_norm(true_arr)
+        true_rad = to_radians(true_arr, 'norm')
     elif true_arr.max() <= (2 * math.pi + 0.1):
-        true_rad = to_radians_from_radians(true_arr)
+        true_rad = to_radians(true_arr, 'radians')
     else:
-        true_rad = to_radians_from_hours(true_arr)
-
-    # determine tissue name from filename (expect pattern ..._vs_<tissue>.predictions.csv)
-    fname = os.path.basename(pred_path)
-    tissue = None
-    if '_vs_' in fname:
-        # take the part after the last _vs_
-        tissue = fname.split('_vs_')[-1]
-    else:
-        tissue = os.path.splitext(fname)[0]
-    # strip known suffixes
-    for suf in ['.predictions.csv', '.predictions', '.csv']:
-        if tissue.endswith(suf):
-            tissue = tissue[: -len(suf)]
-
-    out_dir_final = out_dir if out_dir else os.path.dirname(pred_path)
+        true_rad = to_radians(true_arr, 'hours')
+    
+    tissue = os.path.basename(pred_path).replace('.predictions.csv', '').split('_vs_')[-1]
+    out_dir_final = out_dir or os.path.dirname(pred_path)
     os.makedirs(out_dir_final, exist_ok=True)
     out_path = os.path.join(out_dir_final, f'{tissue}_phase_vs_time.png')
-
-    plot_pair(true_rad, pred_rad, out_path, tissue=tissue)
+    
+    plot_pair(true_rad, pred_rad, out_path, tissue)
     return True
 
 
 def main():
-    p = argparse.ArgumentParser(description='Batch plot phase vs time for predictions CSVs')
-    p.add_argument('--results-dir', required=True, help='Directory containing prediction CSVs')
-    p.add_argument('--out-dir', default=None, help='Directory to write PNGs (defaults to same folder as CSVs)')
-    p.add_argument('--ext', default='.predictions.csv', help='Filename extension/pattern for predictions files')
+    p = argparse.ArgumentParser(description='Batch plot phase vs time')
+    p.add_argument('--results-dir', required=True, help='Results directory')
+    p.add_argument('--out-dir', default=None, help='Output directory')
+    p.add_argument('--ext', default='.predictions.csv', help='File extension')
     args = p.parse_args()
 
-    files = find_prediction_files(args.results_dir, ext=args.ext)
+    files = find_prediction_files(args.results_dir, args.ext)
     if not files:
-        print('No prediction files found in', args.results_dir, file=sys.stderr)
-        sys.exit(2)
+        sys.exit(f'No files found in {args.results_dir}')
 
     for f in files:
         try:
-            process_file(f, out_dir=args.out_dir)
+            process_file(f, args.out_dir)
         except Exception as e:
-            print('Error processing', f, e, file=sys.stderr)
+            print(f'Error: {f}: {e}', file=sys.stderr)
 
 
 if __name__ == '__main__':
