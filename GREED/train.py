@@ -94,17 +94,7 @@ def train_model(
     ranks[order] = np.arange(n_samples)
     X = expressions_tensor[order]
 
-    # Determine positional encoding dimension from model if available
     d_model = getattr(model, 'transformer_dim', preprocessing_info['n_components'])
-
-    # If model projects inputs, apply that projection before adding positional encodings
-    try:
-        if hasattr(model, 'input_proj') and not isinstance(model.input_proj, nn.Identity):
-            X = model.input_proj(X)
-    except Exception:
-        # In case model is on a different device or input_proj fails, skip projection here;
-        # model.forward will handle projection internally when called.
-        pass
 
     pe = sinusoidal_positional_encoding(
         ranks.astype(np.int64), 
@@ -124,7 +114,7 @@ def train_model(
         optimizer.step()
         train_losses.append(total.item())
         scheduler.step(total.item())
-        if epoch % 50 == 0:
+        if epoch % 500 == 0:
             print(f"Epoch {epoch+1}/{num_epochs}, "
                   f"Recon Loss: {recon_loss.item():.2f}")
 
@@ -199,8 +189,8 @@ def main():
     parser.add_argument("--period_hours", type=float, default=24.0)
     parser.add_argument("--dropout", type=float, default=0.2)
     parser.add_argument("--device", default='cuda')
-    parser.add_argument("--align_gene_symbols", type=str, default=None, help='Comma-separated gene symbols for acrophase alignment')
-    parser.add_argument("--align_acrophases", type=str, default=None, help='Comma-separated reference acrophases (radians) corresponding to align_gene_symbols')
+    parser.add_argument("--align_gene_symbols", type=str, default=None)
+    parser.add_argument("--align_acrophases", type=str, default=None)
     parser.add_argument("--random_seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -261,7 +251,6 @@ def main():
     except Exception as e:
         print(f"[WARN] Failed to generate final prediction plot: {e}")
 
-    # If metadata is missing, always perform alignment using fixed mouse gene acrophases
     if not os.path.isfile(metadata):
         try:
             mouse_acrophases = [0, 0.0790637050481884, 0.151440116812406, 2.29555301890004, 2.90900605826091, 

@@ -285,6 +285,8 @@ def best_align_phase_for_comparison(
 
 
 def plot_phase_vs_metadata_comparison(pred_csv: str, celltype: str, meta: pd.DataFrame, out_dir: str):
+    from scipy.stats import pearsonr, spearmanr
+    
     try:
         preds = load_predictions_for_comparison(pred_csv)
         base_columns = [c for c in ('study_sample', 'time_mod24') if c in meta.columns]
@@ -299,28 +301,51 @@ def plot_phase_vs_metadata_comparison(pred_csv: str, celltype: str, meta: pd.Dat
         meta_view['study_sample'] = meta_view['study_sample'].astype(str)
         preds['study_sample'] = preds['study_sample'].astype(str)
 
+        print(f"[DEBUG] Predictions: {len(preds)} samples")
+        print(f"[DEBUG] Metadata: {len(meta_view)} samples")
+
         joined = preds.merge(meta_view, on='study_sample', how='left').dropna(subset=['pred_phase', 'time_mod24'])
+        
+        print(f"[DEBUG] After merge: {len(joined)} samples")
+        print(f"[DEBUG] Sample joined data:\n{joined.head()}")
+        
         if joined.empty:
             print(f"[WARN] No matches for {celltype} ({pred_csv})")
             return None
 
-        # joined contains hours (0..24) for both prediction and metadata
         phase_hours = np.asarray(joined['pred_phase'], dtype=float)
         metadata_hours = np.asarray(joined['time_mod24'], dtype=float)
 
-        # Convert hours -> radians (map [0, period_hours) -> [0, 2*pi))
         phase_rad = time_to_phase(phase_hours, period_hours=24.0)
         metadata_rad = time_to_phase(metadata_hours, period_hours=24.0)
 
-        # Align in radians over a period of 2*pi
-        aligned, r, r2, spearman_R, best_shift, flipped = best_align_phase_for_comparison(
-            phase_rad, metadata_rad, step=0.1, period=2 * np.pi
-        )
+        print(f"[DEBUG] phase_rad range: [{phase_rad.min():.3f}, {phase_rad.max():.3f}]")
+        print(f"[DEBUG] metadata_rad range: [{metadata_rad.min():.3f}, {metadata_rad.max():.3f}]")
+
+        aligned_rad = best_align_phase_for_comparison(
+            phase_rad, metadata_rad, step=0.1
+        )[0]
+        
+        # Wrap aligned phases to [0, 2π) range
+        aligned_rad = np.mod(aligned_rad, 2 * np.pi)
+        
+        print(f"[DEBUG] aligned_rad range: [{aligned_rad.min():.3f}, {aligned_rad.max():.3f}]")
+        print(f"[DEBUG] Number of points to plot: {len(aligned_rad)}")
+
+        r = float(pearsonr(aligned_rad, metadata_rad)[0])
+        spearman_R = float(spearmanr(aligned_rad, metadata_rad)[0])
+        r2 = r * r if np.isfinite(r) else float('nan')
 
         plt.figure(figsize=(8, 7))
-        plt.scatter(aligned, metadata_rad, s=12, alpha=0.8)
-        # Minimal plot: no legend, no title, no extra subtitle
-        plt.grid(True, alpha=0.3, linestyle='--')
+        plt.grid(True, linestyle='-')
+        plt.scatter(metadata_rad, aligned_rad, c='b', s=50, alpha=0.6, edgecolors='darkblue', linewidths=0.5)
+
+        two_pi = 2 * np.pi
+        plt.xlim(0, two_pi)
+        plt.ylim(0, two_pi)
+        plt.xlabel('Collection Phase', fontsize=24)
+        plt.ylabel('Predicted Phase', fontsize=24)
+
         plt.tight_layout()
 
         os.makedirs(out_dir, exist_ok=True)
@@ -328,6 +353,8 @@ def plot_phase_vs_metadata_comparison(pred_csv: str, celltype: str, meta: pd.Dat
         out_path = os.path.join(out_dir, f'phase_vs_time_{safe_ct}.png')
         plt.savefig(out_path, dpi=150, bbox_inches='tight')
         plt.close()
+
+        print(f"Pearson R={r:.2f}, Spearman ρ={spearman_R:.2f}")
         print(f'Saved: {out_path}')
         return out_path, r, r2, spearman_R
 
