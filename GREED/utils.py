@@ -79,13 +79,147 @@ def predict_and_save_phases(
     results_df = _assemble_results_df(phase_coords, phases, preprocessing_info, sample_names)
 
     _remove_legacy_prediction_files(save_dir)
-
-    logger.info("Predicted %d samples; results available in %s", len(phases), save_dir)
-
+    # Always save predictions to CSV so downstream steps (alignment/plotting)
+    # can run even when metadata is unavailable.
+    os.makedirs(save_dir, exist_ok=True)
+    out_csv = os.path.join(save_dir, 'predictions.csv')
+    try:
+        results_df.to_csv(out_csv, index=False)
+        logger.info("Predicted %d samples; results written to %s", len(phases), out_csv)
+    except Exception:
+        logger.exception("Failed to write predictions CSV to %s", out_csv)
 
     logger.debug("create_prediction_plots was removed; no additional plots saved")
 
     return results_df
+
+
+def _compute_gene_phase_from_predictions(pred_phases_rad: np.ndarray, expr_values: np.ndarray):
+    """
+    Estimate the gene acrophase by regressing expression values onto cos/sin
+    of predicted phases. Returns estimated phase in radians and amplitude.
+    Model: expr = c0 + c1*cos(theta) + c2*sin(theta) + noise
+    Gene phase phi = atan2(c2, c1)
+    """
+    # Build design matrix
+    theta = np.asarray(pred_phases_rad, dtype=float)
+    X = np.column_stack([np.cos(theta), np.sin(theta)])
+    # Solve least squares (including intercept)
+    A = np.column_stack([np.ones(len(theta)), X])
+    try:
+        coeffs, *_ = np.linalg.lstsq(A, expr_values, rcond=None)
+    except Exception:
+        return float('nan'), 0.0
+    c1, c2 = coeffs[1], coeffs[2]
+    amp = np.hypot(c1, c2)
+    phase = float(np.arctan2(c2, c1) % (2 * np.pi))
+    return phase, amp
+
+
+def align_predictions_to_gene_acrophases(
+    results_df: pd.DataFrame,
+    test_expr_file: str,
+    gene_symbols: list,
+    ref_acrophases_rad: list,
+    sample_id_col: str = 'Sample_ID'
+):
+    """
+    Align predicted sample phases to reference gene acrophases.
+    - results_df: DataFrame with `sample_id_col` and `Predicted_Phase_Hours`
+    - test_expr_file: path to expression.csv (with 'Gene_Symbol' column)
+    - gene_symbols: list of gene symbols to use for alignment (strings)
+    - ref_acrophases_rad: list of reference acrophases (radians), same length
+
+    Returns: (aligned_df, alignment_shift_rad, per_gene_df)
+    """
+    # Load expression file
+    expr_df = pd.read_csv(test_expr_file, low_memory=False)
+    # Normalize gene symbol case to uppercase for robust matching
+    if 'Gene_Symbol' in expr_df.columns:
+        expr_df['Gene_Symbol'] = expr_df['Gene_Symbol'].astype(str).str.upper()
+    # Determine sample columns order corresponding to results_df
+    if sample_id_col in results_df.columns:
+        sample_order = results_df[sample_id_col].astype(str).tolist()
+    else:
+        raise ValueError(f"results_df missing required column {sample_id_col}")
+
+    # Extract predicted phases in radians
+    pred_hours = pd.to_numeric(results_df['Predicted_Phase_Hours'], errors='coerce').values
+    pred_rad = (pred_hours % 24) * (2 * np.pi / 24.0)
+
+    gene_est_phases = []
+    gene_amps = []
+    gene_names_found = []
+
+    # Uppercase provided gene list for case-insensitive matching
+    gene_symbols_upper = [str(g).upper() for g in gene_symbols]
+
+    # For each gene, find its row(s) in expr_df and aggregate if duplicates
+    for g_upper in gene_symbols_upper:
+        rows = expr_df[expr_df['Gene_Symbol'] == g_upper]
+        if rows.empty:
+            gene_est_phases.append(float('nan'))
+            gene_amps.append(0.0)
+            gene_names_found.append(g_upper)
+            continue
+        # Determine columns for samples in sample_order
+        available_cols = [c for c in sample_order if c in rows.columns]
+        if len(available_cols) == 0:
+            # try Sample column names like in results_df
+            available_cols = [c for c in rows.columns if c in sample_order]
+        if len(available_cols) == 0:
+            gene_est_phases.append(float('nan'))
+            gene_amps.append(0.0)
+            gene_names_found.append(g)
+            continue
+        # If multiple rows (probes), average across rows
+        expr_values = rows[available_cols].astype(float).mean(axis=0).reindex(sample_order).values
+        # Handle missing values
+        expr_values = np.nan_to_num(expr_values, nan=0.0)
+        phase, amp = _compute_gene_phase_from_predictions(pred_rad, expr_values)
+        gene_est_phases.append(phase)
+        gene_amps.append(amp)
+        gene_names_found.append(g_upper)
+
+    gene_est_phases = np.array(gene_est_phases, dtype=float)
+    gene_amps = np.array(gene_amps, dtype=float)
+    ref_acrophases = np.array(ref_acrophases_rad, dtype=float)
+
+    # Compute per-gene shift needed: shift_i = ref - est (mod 2pi)
+    diffs = (ref_acrophases - gene_est_phases) % (2 * np.pi)
+    # Convert diffs to [-pi, pi]
+    diffs = (diffs + np.pi) % (2 * np.pi) - np.pi
+
+    # Weight by amplitude for mean shift
+    weights = gene_amps.copy()
+    # Ignore NaN phase estimates
+    valid = np.isfinite(gene_est_phases) & np.isfinite(ref_acrophases) & (weights > 0)
+    if not np.any(valid):
+        alignment_shift = 0.0
+    else:
+        w = weights[valid]
+        dif = diffs[valid]
+        # circular mean of dif with weights
+        sin_sum = np.sum(w * np.sin(dif))
+        cos_sum = np.sum(w * np.cos(dif))
+        alignment_shift = float(np.arctan2(sin_sum, cos_sum))
+
+    # Apply shift to predicted phases
+    aligned_rad = (pred_rad + alignment_shift) % (2 * np.pi)
+    aligned_hours = aligned_rad * 24.0 / (2 * np.pi)
+
+    aligned_df = results_df.copy()
+    aligned_df['Predicted_Phase_Hours_Aligned'] = aligned_hours
+
+    per_gene_df = pd.DataFrame({
+        'Gene': gene_names_found,
+        'Estimated_Acrophase_Rad': gene_est_phases,
+        'Estimated_Amplitude': gene_amps,
+        'Reference_Acrophase_Rad': ref_acrophases,
+        'Diff_Rad': diffs
+    })
+
+    return aligned_df, alignment_shift, per_gene_df
 
 def sanitize_filename(s: str) -> str:
     if s is None:

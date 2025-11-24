@@ -48,7 +48,17 @@ def load_and_preprocess_train_data(
     sample_columns = [col for col in df.columns if col != 'Gene_Symbol']
     gene_df = df[~df['Gene_Symbol'].isin(['time_C'])].copy()
     initial_gene_symbols = gene_df['Gene_Symbol'].values
-    expression_data = gene_df[sample_columns].values.T
+    sample_df = gene_df[sample_columns].copy()
+    sample_df = sample_df.apply(pd.to_numeric, errors='coerce')
+    if sample_df.isna().any().any():
+        n_nan = int(sample_df.isna().sum().sum())
+        print(f"Warning: {n_nan} non-numeric values found in sample columns; coercing to NaN and imputing 0.")
+        try:
+            example_nan = sample_df.columns[sample_df.isna().any()].tolist()[:5]
+            print(f"Columns with NaNs (examples): {example_nan}")
+        except Exception:
+            pass
+    expression_data = sample_df.values.T
 
     print(f"Initial data shape: {expression_data.shape}")
 
@@ -188,9 +198,22 @@ def load_and_preprocess_test_data(test_file, preprocessing_info):
     gene_df = df[~df['Gene_Symbol'].isin(['time_C'])].copy()
     final_gene_symbols = preprocessing_info['final_gene_symbols']
     if gene_df['Gene_Symbol'].duplicated().any():
+        # If the test file contains duplicate Gene_Symbol rows (e.g., multiple
+        # probes mapping to the same gene), aggregate them by mean across the
+        # available sample columns. Ensure aggregation columns are numeric to
+        # avoid dtype/object aggregation errors.
         agg_cols = [c for c in available_sample_columns if c in gene_df.columns]
-        grouped = gene_df.groupby('Gene_Symbol', as_index=False)[agg_cols].mean()
-        gene_df = grouped
+        if len(agg_cols) == 0:
+            # nothing to aggregate; leave gene_df as-is
+            pass
+        else:
+            # coerce aggregation columns to numeric, non-parsable -> NaN
+            try:
+                gene_df[agg_cols] = gene_df[agg_cols].apply(pd.to_numeric, errors='coerce')
+            except Exception:
+                print("Warning: failed to coerce test aggregation columns to numeric; proceeding with original types")
+            grouped = gene_df.groupby('Gene_Symbol', as_index=False)[agg_cols].mean()
+            gene_df = grouped
 
     gene_df_indexed = gene_df.set_index('Gene_Symbol').reindex(final_gene_symbols)
     test_expression_data = gene_df_indexed[available_sample_columns].values.T
