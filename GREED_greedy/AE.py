@@ -2,13 +2,12 @@ import torch
 import torch.nn as nn
 
 
-def circular_node(x: torch.Tensor) -> torch.Tensor:
-    norm = torch.norm(x, dim=1, keepdim=True) + 1e-8
-    return x / norm
-
-
 class PhaseAutoEncoder(nn.Module):
     def __init__(self, input_dim, dropout=0.2, nhead=5):
+        """
+        Transformer autoencoder.
+        Only used for training - greedy ordering happens on Transformer output AFTER training.
+        """
         super(PhaseAutoEncoder, self).__init__()
         self.input_dim = input_dim
         self.nhead = nhead
@@ -38,22 +37,16 @@ class PhaseAutoEncoder(nn.Module):
         )
         self.transformer = nn.TransformerEncoder(transformer_layer, num_layers=2)
         
-        # Phase encoder directly from transformer output
-        self.encoder = nn.Linear(transformer_dim, 2)
-        
-        # Decoder from phase back to transformer dimension
-        self.decoder = nn.Linear(2, transformer_dim)
-        
-        # Output projection if needed
-        if transformer_dim != input_dim:
-            self.output_proj = nn.Linear(transformer_dim, input_dim)
-        else:
-            self.output_proj = None
+        # Decoder from transformer output back to original dimension
+        self.decoder = nn.Linear(transformer_dim, input_dim)
         
         self.dropout = nn.Dropout(dropout)
 
-    def encode(self, x):
-        """Encode to phase from PCA components"""
+    def forward(self, x):
+        """
+        Forward pass for training.
+        Returns dummy phase values (not used) and reconstruction.
+        """
         # Project input if needed
         if self.input_proj is not None:
             x = self.input_proj(x)
@@ -63,25 +56,11 @@ class PhaseAutoEncoder(nn.Module):
         trans_out = self.transformer(seq)
         trans_out = trans_out.squeeze(1)
         
-        # Encode to phase
-        phase_coords = self.encoder(trans_out)
-        phase_coords_normalized = circular_node(phase_coords)
-        phase_angles = torch.atan2(phase_coords_normalized[:, 1], phase_coords_normalized[:, 0])
-        phase_angles = torch.remainder(phase_angles + 2 * torch.pi, 2 * torch.pi)
-        return phase_coords_normalized, phase_angles
-
-    def decode(self, phase_coords_normalized):
-        """Decode from phase back to original input dimension"""
-        trans_dim = self.decoder(phase_coords_normalized)
+        # Decode back to original dimension
+        reconstructed = self.decoder(trans_out)
         
-        # Project back if needed
-        if self.output_proj is not None:
-            decoded = self.output_proj(trans_dim)
-        else:
-            decoded = trans_dim
-        return decoded
-
-    def forward(self, x):
-        phase_coords_normalized, phase_angles = self.encode(x)
-        reconstructed = self.decode(phase_coords_normalized)
-        return phase_coords_normalized, phase_angles, reconstructed
+        # Return dummy phase values (not used in new approach)
+        dummy_phase_coords = torch.zeros(x.shape[0], 2, device=x.device)
+        dummy_phase_angles = torch.zeros(x.shape[0], device=x.device)
+        
+        return dummy_phase_coords, dummy_phase_angles, reconstructed

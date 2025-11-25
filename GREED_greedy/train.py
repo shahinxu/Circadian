@@ -15,6 +15,29 @@ from utils import align_predictions_to_gene_acrophases
 from datetime import datetime
 
 
+def greedy_ordering(components: np.ndarray):
+    """
+    Solve traveling salesman problem to find optimal ordering.
+    Minimize total distance when visiting all samples in sequence.
+    """
+    n = components.shape[0]
+    visited = np.zeros(n, dtype=bool)
+    order = []
+    start = np.argmin(np.sum(np.abs(components), axis=1))
+    cur = start
+    order.append(cur)
+    visited[cur] = True
+    for _ in range(n - 1):
+        diffs = np.abs(components - components[cur:cur+1, :])
+        dists = np.sum(diffs, axis=1)
+        dists[visited] = np.inf
+        nxt = np.argmin(dists)
+        order.append(nxt)
+        visited[nxt] = True
+        cur = nxt
+    return np.array(order, dtype=int)
+
+
 def plot_components_by_phase(components, phases, save_path, n_plot=None):
     order = np.argsort(phases)
     phases_sorted = phases[order]
@@ -39,6 +62,10 @@ def train_model(
     num_epochs=100, lr=1e-3, device='cuda',
     lambda_recon=0.2,
     save_dir='./model_checkpoints'):
+    """
+    Train Transformer autoencoder only.
+    No greedy ordering during training - that happens AFTER training.
+    """
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -58,12 +85,12 @@ def train_model(
         all_expressions.append(sample['expression'])
     X = torch.stack(all_expressions).to(device)
     
-    print(f"Training on PCA components (shape: {X.shape})...")
+    print(f"Training autoencoder on PCA components (shape: {X.shape})...")
 
     for epoch in range(num_epochs):
         model.train()
         optimizer.zero_grad()
-        _, pred_phases, recon = model(X)
+        _, _, recon = model(X)
         recon_loss = recon_criterion(recon, X)
         total = lambda_recon * recon_loss
         total.backward()
@@ -74,14 +101,29 @@ def train_model(
             print(f"Epoch {epoch+1}/{num_epochs}, "
                   f"Recon Loss: {recon_loss.item():.2f}")
 
+    print("\n=== Training completed ===")
+    print("Now performing greedy ordering on Transformer output...")
+    
+    # After training: get Transformer output and do greedy ordering ONCE
     model.eval()
     with torch.no_grad():
-        _, pred_phases, _ = model(X)
-    pred_phases_np = pred_phases.detach().cpu().numpy()
+        # Project input if needed
+        if model.input_proj is not None:
+            X_proj = model.input_proj(X)
+        else:
+            X_proj = X
+        
+        # Get Transformer output (before phase encoder)
+        seq = X_proj.unsqueeze(1)
+        trans_out = model.transformer(seq)
+        trans_out = trans_out.squeeze(1)
+        trans_out_np = trans_out.cpu().numpy()
     
-    # Sort by predicted phase
-    pred_order = np.argsort(pred_phases_np)
-    return model, pred_order
+    # Solve traveling salesman problem on Transformer output
+    print(f"Solving TSP on Transformer output (shape: {trans_out_np.shape})...")
+    greedy_order = greedy_ordering(trans_out_np)
+    
+    return model, greedy_order
 
 
 def evaluate_order_plot(
@@ -182,7 +224,7 @@ def main():
     
     print(f"Pipeline: {preprocessing_info['n_components']} PCA components -> Transformer -> Phase (2D)")
 
-    model, pred_order = train_model(
+    model, greedy_order = train_model(
         model,
         train_dataset=train_dataset,
         preprocessing_info=preprocessing_info,
@@ -193,100 +235,17 @@ def main():
         save_dir=save_dir,
     )
 
+    # Evaluate greedy ordering result
+    print("\n=== Evaluating greedy ordering ===")
     evaluate_order_plot(
-        pred_order, 
+        greedy_order, 
         preprocessing_info, 
         metadata, 
         save_dir, 
         period_hours=args.period_hours
     )
 
-    print("Generating final predictions and comparison plot in main save_dir...")
-    results_df = None
-    try:
-        results_df = evaluate_test_set(
-            model=model,
-            test_file=train_file,
-            preprocessing_info=preprocessing_info,
-            save_dir=save_dir,
-            device=args.device,
-            metadata_path=metadata
-        )
-    except Exception as e:
-        print(f"[WARN] Failed to generate final prediction plot: {e}")
-
-    if not os.path.isfile(metadata):
-        try:
-            mouse_acrophases = [0, 0.0790637050481884, 0.151440116812406, 2.29555301890004, 2.90900605826091, 
-                                2.98706493493206, 2.99149022777511, 3.00769248308471, 3.1219769314524, 
-                                3.3058682224604, 3.31357155959037, 3.42557704861225, 3.50078722833753, 
-                                3.88658015146741, 4.99480367551318, 5.04951134876313, 6.00770260397838]
-            mouse_gene_symbol = ["Arntl", "Clock", "Npas2", "Nr1d1", "Bhlhe41", "Nr1d2", 
-                                "Dbp", "Ciart", "Per1", "Per3", "Tef", "Hlf", 
-                                "Cry2", "Per2", "Cry1", "Rorc", "Nfil3"]
-            preds_csv = os.path.join(save_dir, 'predictions.csv')
-            if os.path.isfile(preds_csv):
-                try:
-                    aligned_df, shift_rad, per_gene_df = align_predictions_to_gene_acrophases(
-                        results_df=pd.read_csv(preds_csv),
-                        test_expr_file=train_file,
-                        gene_symbols=mouse_gene_symbol,
-                        ref_acrophases_rad=mouse_acrophases
-                    )
-                    aligned_csv = os.path.join(save_dir, 'predictions_aligned.csv')
-                    aligned_df.to_csv(aligned_csv, index=False)
-                    per_gene_csv = os.path.join(save_dir, 'alignment_gene_summary.csv')
-                    per_gene_df.to_csv(per_gene_csv, index=False)
-                    print(f"No metadata present — applied mouse-based alignment (shift={shift_rad:.4f} rad). Saved: {aligned_csv}")
-                except Exception as e:
-                    print(f"[WARN] Failed to perform automatic mouse-based alignment: {e}")
-            else:
-                # If predictions_df already returned from evaluate_test_set, use that
-                if results_df is not None:
-                    try:
-                        aligned_df, shift_rad, per_gene_df = align_predictions_to_gene_acrophases(
-                            results_df=results_df,
-                            test_expr_file=train_file,
-                            gene_symbols=mouse_gene_symbol,
-                            ref_acrophases_rad=mouse_acrophases
-                        )
-                        aligned_csv = os.path.join(save_dir, 'predictions_aligned.csv')
-                        aligned_df.to_csv(aligned_csv, index=False)
-                        per_gene_csv = os.path.join(save_dir, 'alignment_gene_summary.csv')
-                        per_gene_df.to_csv(per_gene_csv, index=False)
-                        print(f"No metadata present — applied mouse-based alignment (shift={shift_rad:.4f} rad). Saved: {aligned_csv}")
-                    except Exception as e:
-                        print(f"[WARN] Failed to perform automatic mouse-based alignment: {e}")
-        except Exception as e:
-            print(f"[WARN] Unexpected error while attempting automatic alignment: {e}")
-
-    if args.align_gene_symbols and args.align_acrophases:
-        try:
-            gene_list = [g.strip() for g in args.align_gene_symbols.split(',') if g.strip()]
-            acro_list = [float(x) for x in args.align_acrophases.split(',') if x.strip()]
-            if len(gene_list) != len(acro_list):
-                print('[WARN] align_gene_symbols and align_acrophases lengths differ; skipping alignment')
-            else:
-                preds_csv = os.path.join(save_dir, 'predictions.csv')
-                if os.path.isfile(preds_csv):
-                    preds_df = pd.read_csv(preds_csv)
-                elif results_df is not None:
-                    preds_df = results_df
-                else:
-                    preds_df = None
-                if preds_df is None:
-                    print(f"[WARN] No predictions available to align; skipping")
-                else:
-                    aligned_df, shift_rad, per_gene_df = align_predictions_to_gene_acrophases(preds_df, train_file, gene_list, acro_list)
-                    aligned_csv = os.path.join(save_dir, 'predictions_aligned.csv')
-                    aligned_df.to_csv(aligned_csv, index=False)
-                    per_gene_csv = os.path.join(save_dir, 'alignment_gene_summary.csv')
-                    per_gene_df.to_csv(per_gene_csv, index=False)
-                    print(f"Alignment applied (shift={shift_rad:.4f} rad). Aligned predictions: {aligned_csv}; per-gene summary: {per_gene_csv}")
-        except Exception as e:
-            print(f"[WARN] Failed to perform gene-based alignment: {e}")
-
-    print("Training completed. Final ordering obtained from last epoch.")
+    print("Training completed. Greedy ordering result saved.")
 
 
 if __name__ == '__main__':
