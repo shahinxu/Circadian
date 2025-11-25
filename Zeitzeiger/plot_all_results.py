@@ -16,7 +16,9 @@ import matplotlib.pyplot as plt
 
 
 def find_prediction_files(results_dir, ext='.predictions.csv'):
-    return sorted(glob(os.path.join(results_dir, f'*{ext}')))
+    # Search recursively in subdirectories
+    pattern = os.path.join(results_dir, '**', f'*{ext}')
+    return sorted(glob(pattern, recursive=True))
 
 
 def detect_columns(df):
@@ -84,6 +86,12 @@ def process_file(pred_path, out_dir=None):
         true_rad = to_radians(true_arr, 'hours')
     
     tissue = os.path.basename(pred_path).replace('.predictions.csv', '').split('_vs_')[-1]
+    # If still generic, try to extract from parent directory
+    if tissue == 'zeitzeiger':
+        parent_dir = os.path.basename(os.path.dirname(pred_path))
+        if parent_dir.startswith('test_'):
+            tissue = parent_dir.replace('test_', '')
+    
     out_dir_final = out_dir or os.path.dirname(pred_path)
     os.makedirs(out_dir_final, exist_ok=True)
     out_path = os.path.join(out_dir_final, f'{tissue}_phase_vs_time.png')
