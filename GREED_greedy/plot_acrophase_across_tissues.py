@@ -18,11 +18,9 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 
 def find_latest_fit_csv(tissue_dir):
-    # tissue_dir: GREED/results/GTEx/<tissue>
     subdirs = [d for d in glob.glob(os.path.join(tissue_dir, '*')) if os.path.isdir(d)]
     if not subdirs:
         return None
-    # timestamps are formatted like YYYY-MM-DDTHH_MM_SS; lexicographic max works
     latest = sorted(subdirs)[-1]
     fit_path = os.path.join(latest, 'fit_parameters.csv')
     if os.path.isfile(fit_path):
