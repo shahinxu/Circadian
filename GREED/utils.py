@@ -221,11 +221,6 @@ def align_predictions_to_gene_acrophases(
 
     return aligned_df, alignment_shift, per_gene_df
 
-def sanitize_filename(s: str) -> str:
-    if s is None:
-        return 'ALL'
-    return ''.join(c if c.isalnum() or c in ('-', '_') else '_' for c in str(s))
-
 
 def load_metadata_for_phase_comparison(metadata_csv: str) -> pd.DataFrame:
     meta = pd.read_csv(metadata_csv, low_memory=False)
@@ -267,54 +262,6 @@ def load_metadata_for_phase_comparison(metadata_csv: str) -> pd.DataFrame:
         return m[['study_sample', 'time_mod24']]
 
     raise ValueError("Unsupported metadata format. Expected one of: {'study','sample','time'}; {'study_sample','time_mod24'}; {'study_sample','time'}; {'Sample','Time_Hours'}; {'Sample','time'}")
-
-
-def load_predictions_for_comparison(pred_csv: str) -> pd.DataFrame:
-    df = pd.read_csv(pred_csv)
-    # Infer study_sample
-    if 'study_sample' in df.columns:
-        df['study_sample'] = df['study_sample'].astype(str)
-    elif {'study', 'sample'}.issubset(df.columns):
-        df['study'] = df['study'].astype(str)
-        df['sample'] = df['sample'].astype(str)
-        df['study_sample'] = df['study'] + '_' + df['sample']
-    elif 'Sample' in df.columns:
-        df['study_sample'] = df['Sample'].astype(str)
-    elif 'Sample_ID' in df.columns:
-        df['study_sample'] = df['Sample_ID'].astype(str)
-    elif 'sample' in df.columns:
-        df['study_sample'] = df['sample'].astype(str)
-    else:
-        raise ValueError(f'{pred_csv}: cannot infer study_sample (expected study+sample, Sample, or study_sample)')
-
-    if 'Predicted_Phase_Hours' in df.columns:
-        pred_hours = pd.to_numeric(df['Predicted_Phase_Hours'], errors='coerce')
-    elif 'Predicted_Phase_Radians' in df.columns:
-        rad = pd.to_numeric(df['Predicted_Phase_Radians'], errors='coerce')
-        pred_hours = rad * 24.0 / (2 * np.pi)
-    elif 'Predicted_Phase_Degrees' in df.columns:
-        deg = pd.to_numeric(df['Predicted_Phase_Degrees'], errors='coerce')
-        pred_hours = deg * (24.0 / 360.0)
-    else:
-        phase_candidates = [
-            'phase', 'Phase', 'phase_hours', 'pred_phase', 'predicted_phase',
-            'theta', 'Theta', 'predicted_time', 'pred_time', 'phase_prediction',
-        ]
-        phase_col = None
-        for c in phase_candidates:
-            if c in df.columns:
-                phase_col = c
-                break
-        if phase_col is None:
-            num_cols = [c for c in df.columns if np.issubdtype(np.asarray(df[c]).dtype, np.number)]
-            if num_cols:
-                phase_col = num_cols[-1]
-            else:
-                raise ValueError(f'{pred_csv}: cannot locate predicted phase column')
-        pred_hours = pd.to_numeric(df[phase_col], errors='coerce')
-
-    df['pred_phase'] = pred_hours % 24
-    return df[['study_sample', 'pred_phase']]
 
 
 def best_align_phase_for_comparison(
@@ -424,7 +371,7 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
 
     plt.figure(figsize=(8, 7))
     plt.grid(True, linestyle='-')
-    plt.scatter(metadata_rad, aligned_rad, c='b')
+    plt.scatter(metadata_rad, aligned_rad, c='r', s=100)
 
     two_pi = 2 * np.pi
     plt.xlim(0, two_pi)

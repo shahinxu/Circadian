@@ -46,7 +46,7 @@ def sinusoidal_positional_encoding(positions: np.ndarray, d_model: int):
         pe[:, 1::2] = np.cos(position * div_term[:cos_len])
     return pe
 
-def plot_components_by_phase(components, phases, save_path, n_plot=None):
+def plot_express(components, phases, save_path, n_plot=None):
     order = np.argsort(phases)
     phases_sorted = phases[order]
     comp_sorted = components[order]
@@ -64,66 +64,63 @@ def plot_components_by_phase(components, phases, save_path, n_plot=None):
     plt.close()
 
 
-
 def train_model(
     model: PhaseAutoEncoder, train_dataset, preprocessing_info,
     num_epochs=100, lr=1e-3, device='cuda',
     lambda_recon=0.2,
     save_dir='./model_checkpoints'):
+    
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode='min',
-        factor=0.5,
-        patience=100
-    )
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=100)
     recon_criterion = nn.MSELoss()
+    
     train_losses = []
     os.makedirs(save_dir, exist_ok=True)
 
-    all_expressions = []
-    for i in range(len(train_dataset)):
-        sample = train_dataset[i]
-        all_expressions.append(sample['expression'])
+    # 1. 准备数据
+    all_expressions = [train_dataset[i]['expression'] for i in range(len(train_dataset))]
     expressions_tensor = torch.stack(all_expressions).to(device)
+    
     components = expressions_tensor.cpu().numpy().astype(np.float32)
-    n_samples = components.shape[0]
     order = greedy_ordering(components)
-    ranks = np.empty(n_samples, dtype=np.int64)
-    ranks[order] = np.arange(n_samples)
-    X = expressions_tensor[order]
-
-    d_model = getattr(model, 'transformer_dim', preprocessing_info['n_components'])
-
-    pe = sinusoidal_positional_encoding(
-        ranks.astype(np.int64), 
-        d_model=d_model
-    )
-    pe_tensor = torch.from_numpy(pe).to(device)
-    pe_ordered = pe_tensor[order]
-    X = X + pe_ordered
-
+    X_ordered = expressions_tensor[order] 
+    
+    model.train()
+    
     for epoch in range(num_epochs):
-        model.train()
         optimizer.zero_grad()
-        _, pred_phases, recon = model(X)
-        recon_loss = recon_criterion(recon, X)
+        
+        # Forward pass
+        # 注意：这里输入的是纯数据，没有加 PE
+        _, pred_phases, recon = model(X_ordered)
+        
+        recon_loss = recon_criterion(recon, X_ordered)
+        
+        # 可选：加入平滑性约束 (Smoothness Loss)
+        # 惩罚相邻样本的相位突变，替代 PE 的作用
+        # phases_diff = torch.abs(pred_phases[1:] - pred_phases[:-1])
+        # smooth_loss = torch.mean(phases_diff)
+        # total = lambda_recon * recon_loss + 0.1 * smooth_loss
+        
         total = lambda_recon * recon_loss
+        
         total.backward()
         optimizer.step()
         train_losses.append(total.item())
         scheduler.step(total.item())
-        if epoch % 500 == 0:
-            print(f"Epoch {epoch+1}/{num_epochs}, "
-                  f"Recon Loss: {recon_loss.item():.2f}")
+        
+        if epoch % 50 == 0:
+            print(f"Epoch {epoch+1}/{num_epochs}, Recon Loss: {recon_loss.item():.4f}")
 
     model.eval()
     with torch.no_grad():
-        _, pred_phases, recon = model(X)
+        _, pred_phases, recon = model(X_ordered)
+    
     pred_phases_np = pred_phases.detach().cpu().numpy()
-    pred_order_over_reordered = np.argsort(pred_phases_np)
-    pred_order_original = order[pred_order_over_reordered]
+    pred_order_relative = np.argsort(pred_phases_np)
+    pred_order_original = order[pred_order_relative]
+    
     return model, pred_order_original
 
 
