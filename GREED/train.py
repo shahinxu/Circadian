@@ -122,31 +122,54 @@ def evaluate_order_plot(
 
 
 def evaluate_test_set(
-        model, 
-        test_file, 
-        preprocessing_info, 
-        save_dir, 
-        device='cuda', 
-        metadata_path=None
-    ):
+    model, 
+    test_file, 
+    preprocessing_info, 
+    save_dir, 
+    device='cuda', 
+    metadata_path=None
+):
     if not os.path.isfile(test_file):
         print("No test file provided; skipping test set evaluation.")
         return None
 
+    print("Loading test set for Set Transformer evaluation...")
+    
     test_dataset, test_preprocessing_info = load_and_preprocess_test_data(
         test_file, preprocessing_info
     )
-    test_loader = DataLoader(test_dataset, batch_size=1000, shuffle=False)
 
-    results_df = predict_and_save_phases(
-        model=model,
-        test_loader=test_loader,
-        preprocessing_info=test_preprocessing_info,
-        device=device,
-        save_dir=save_dir
-    )
+    all_expressions = [test_dataset[i]['expression'] for i in range(len(test_dataset))]
+    X_test = torch.stack(all_expressions).to(device)
+    X_test = X_test / (torch.norm(X_test, dim=1, keepdim=True) + 1e-8)
+    X_input = X_test.unsqueeze(0)
 
-    if metadata_path and os.path.isfile(metadata_path) and results_df is not None:
+    model.eval()
+    with torch.no_grad():
+        _, pred_phases, recon = model(X_input)
+    pred_phases_np = pred_phases.squeeze(0).cpu().numpy()
+    
+    period = preprocessing_info.get('period_hours', 24.0)
+    pred_hours = (pred_phases_np / (2 * np.pi)) * period
+    
+    sample_names = test_preprocessing_info.get('sample_columns', [])
+    
+    if len(sample_names) != len(pred_hours):
+        print(f"[WARN] Sample names count ({len(sample_names)}) != Predictions count ({len(pred_hours)}). Generating dummy IDs.")
+        sample_names = [f"Sample_{i}" for i in range(len(pred_hours))]
+
+    results_df = pd.DataFrame({
+        'Sample_ID': sample_names,
+        'pred_phase_rad': pred_phases_np,
+        'Predicted_Phase_Hours': pred_hours
+    })
+
+    os.makedirs(save_dir, exist_ok=True)
+    results_path = os.path.join(save_dir, 'predictions.csv')
+    results_df.to_csv(results_path, index=False)
+    print(f"Test predictions saved to: {results_path}")
+
+    if metadata_path and os.path.isfile(metadata_path):
         plot_comparsion(results_df, metadata_path, save_dir)
 
     return results_df

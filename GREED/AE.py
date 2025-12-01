@@ -29,18 +29,11 @@ class SetPhaseAutoEncoder(nn.Module):
     def encode(self, x):
         x_proj = self.input_proj(x)
         x_proj = self.dropout(x_proj)
+        trans_out = self.transformer(x_proj)
         
-        # === 关键点：直接进 Transformer，不加 Positional Encoding ===
-        # Self-Attention 会计算所有 Sample 之间的两两关系矩阵 (N x N)
-        trans_out = self.transformer(x_proj) # [B, N, d_model]
-        
-        # 映射到 Latent
         phase_coords = self.to_latent(trans_out)
         
-        # 归一化到圆上
         phase_coords_normalized = self.circular_node(phase_coords)
-        
-        # 计算角度 (Phase)
         phase_angles = torch.atan2(phase_coords_normalized[:, :, 1], 
                                    phase_coords_normalized[:, :, 0])
         phase_angles = torch.remainder(phase_angles + 2 * torch.pi, 2 * torch.pi)
