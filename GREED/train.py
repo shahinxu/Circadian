@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from utils import predict_and_save_phases
 from utils import align_predictions_to_gene_acrophases
 from datetime import datetime
+import torch.nn.functional as F
 
 def greedy_ordering(components: np.ndarray):
     n = components.shape[0]
@@ -33,18 +34,6 @@ def greedy_ordering(components: np.ndarray):
         visited[nxt] = True
         cur = nxt
     return np.array(order, dtype=int)
-
-
-def sinusoidal_positional_encoding(positions: np.ndarray, d_model: int):
-    n = positions.shape[0]
-    pe = np.zeros((n, d_model), dtype=np.float32)
-    position = positions[:, np.newaxis]
-    div_term = np.exp(np.arange(0, d_model, 2) * -(np.log(10000.0) / d_model))
-    pe[:, 0::2] = np.sin(position * div_term)
-    cos_len = pe[:, 1::2].shape[1]
-    if cos_len > 0:
-        pe[:, 1::2] = np.cos(position * div_term[:cos_len])
-    return pe
 
 def plot_express(components, phases, save_path, n_plot=None):
     order = np.argsort(phases)
@@ -78,33 +67,21 @@ def train_model(
     train_losses = []
     os.makedirs(save_dir, exist_ok=True)
 
-    # 1. 准备数据
     all_expressions = [train_dataset[i]['expression'] for i in range(len(train_dataset))]
     expressions_tensor = torch.stack(all_expressions).to(device)
     
     components = expressions_tensor.cpu().numpy().astype(np.float32)
     order = greedy_ordering(components)
-    X_ordered = expressions_tensor[order] 
+    X_ordered = expressions_tensor
+    X_ordered = X_ordered / (torch.norm(X_ordered, dim=1, keepdim=True) + 1e-8)
     
     model.train()
     
     for epoch in range(num_epochs):
         optimizer.zero_grad()
-        
-        # Forward pass
-        # 注意：这里输入的是纯数据，没有加 PE
         _, pred_phases, recon = model(X_ordered)
-        
-        recon_loss = recon_criterion(recon, X_ordered)
-        
-        # 可选：加入平滑性约束 (Smoothness Loss)
-        # 惩罚相邻样本的相位突变，替代 PE 的作用
-        # phases_diff = torch.abs(pred_phases[1:] - pred_phases[:-1])
-        # smooth_loss = torch.mean(phases_diff)
-        # total = lambda_recon * recon_loss + 0.1 * smooth_loss
-        
+        recon_loss = 1 - F.cosine_similarity(recon, X_ordered, dim=1).mean()
         total = lambda_recon * recon_loss
-        
         total.backward()
         optimizer.step()
         train_losses.append(total.item())
@@ -181,7 +158,7 @@ def main():
     parser.add_argument("--dataset_path", required=True)
     parser.add_argument("--n_components", type=int, default=5)
     parser.add_argument("--num_epochs", type=int, default=200)
-    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--lr", type=float, default=0.1)
     parser.add_argument("--lambda_recon", type=float, default=0.01)
     parser.add_argument("--period_hours", type=float, default=24.0)
     parser.add_argument("--dropout", type=float, default=0.2)

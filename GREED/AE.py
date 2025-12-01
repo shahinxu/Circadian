@@ -20,15 +20,8 @@ class PhaseAutoEncoder(nn.Module):
             norm_first=True
         )
         self.transformer = nn.TransformerEncoder(transformer_layer, num_layers=num_layers)
-
         self.to_latent = nn.Linear(d_model, 2)
-    
-        self.decoder = nn.Sequential(
-            nn.Linear(2, d_model // 2),
-            nn.GELU(),
-            nn.Linear(d_model // 2, input_dim)
-        )
-        
+        self.decoder = nn.Linear(2, input_dim)
         self.dropout = nn.Dropout(dropout)
 
     def encode(self, x):
@@ -45,6 +38,7 @@ class PhaseAutoEncoder(nn.Module):
 
     def decode(self, phase_coords_normalized):
         decoded = self.decoder(phase_coords_normalized)
+        decoded = decoded / (torch.norm(decoded, dim=1, keepdim=True) + 1e-8)
         return decoded
 
     def forward(self, x):

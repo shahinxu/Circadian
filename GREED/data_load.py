@@ -47,6 +47,36 @@ def load_and_preprocess_train_data(
     df = pd.read_csv(train_file, low_memory=False)
     sample_columns = [col for col in df.columns if col != 'Gene_Symbol']
     gene_df = df[~df['Gene_Symbol'].isin(['time_C'])].copy()
+    
+    # Load seed genes and filter if seed_genes.txt exists
+    import os
+    train_dir = os.path.dirname(train_file)
+    seed_genes_path = os.path.join(train_dir, 'seed_genes.txt')
+    
+    if os.path.exists(seed_genes_path):
+        print(f"Loading seed genes from {seed_genes_path}")
+        with open(seed_genes_path, 'r') as f:
+            seed_genes = set(line.strip().upper() for line in f if line.strip())
+        print(f"Found {len(seed_genes)} seed genes")
+        
+        # Convert gene symbols to uppercase for matching
+        gene_df['Gene_Symbol_Upper'] = gene_df['Gene_Symbol'].str.upper()
+        
+        # Filter to keep only genes in seed_genes
+        before_filter = len(gene_df)
+        gene_df = gene_df[gene_df['Gene_Symbol_Upper'].isin(seed_genes)].copy()
+        after_filter = len(gene_df)
+        
+        print(f"Filtered genes: {before_filter} -> {after_filter} (kept {after_filter} seed genes)")
+        
+        # Remove the temporary uppercase column
+        gene_df = gene_df.drop(columns=['Gene_Symbol_Upper'])
+        
+        if len(gene_df) == 0:
+            raise ValueError("No genes remain after filtering with seed_genes.txt")
+    else:
+        print("No seed_genes.txt found, processing all genes")
+    
     initial_gene_symbols = gene_df['Gene_Symbol'].values
     sample_df = gene_df[sample_columns].copy()
     sample_df = sample_df.apply(pd.to_numeric, errors='coerce')
@@ -198,16 +228,10 @@ def load_and_preprocess_test_data(test_file, preprocessing_info):
     gene_df = df[~df['Gene_Symbol'].isin(['time_C'])].copy()
     final_gene_symbols = preprocessing_info['final_gene_symbols']
     if gene_df['Gene_Symbol'].duplicated().any():
-        # If the test file contains duplicate Gene_Symbol rows (e.g., multiple
-        # probes mapping to the same gene), aggregate them by mean across the
-        # available sample columns. Ensure aggregation columns are numeric to
-        # avoid dtype/object aggregation errors.
         agg_cols = [c for c in available_sample_columns if c in gene_df.columns]
         if len(agg_cols) == 0:
-            # nothing to aggregate; leave gene_df as-is
             pass
         else:
-            # coerce aggregation columns to numeric, non-parsable -> NaN
             try:
                 gene_df[agg_cols] = gene_df[agg_cols].apply(pd.to_numeric, errors='coerce')
             except Exception:
