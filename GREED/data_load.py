@@ -34,21 +34,13 @@ def blunt_percentile(data, percent=0.975):
 def load_and_preprocess_train_data(
         train_file,
         n_components=50,
-        blunt_percent=0.975,
-        min_cv=0.14,
-        max_cv=0.9,
-        min_mean_rank=10000,
-        use_oscope_filter=True,
-        min_pair_corr=0.2,
-        max_pair_corr=0.9,
-        min_gene_pairs=5
+        blunt_percent=0.975
     ):
     print("=== Loading training data ===")
     df = pd.read_csv(train_file, low_memory=False)
     sample_columns = [col for col in df.columns if col != 'Gene_Symbol']
     gene_df = df[~df['Gene_Symbol'].isin(['time_C'])].copy()
     
-    # Load seed genes and filter if seed_genes.txt exists
     import os
     train_dir = os.path.dirname(train_file)
     seed_genes_path = os.path.join(train_dir, 'seed_genes.txt')
@@ -59,7 +51,6 @@ def load_and_preprocess_train_data(
             seed_genes = set(line.strip().upper() for line in f if line.strip())
         print(f"Found {len(seed_genes)} seed genes")
         
-        # Convert gene symbols to uppercase for matching
         gene_df['Gene_Symbol_Upper'] = gene_df['Gene_Symbol'].str.upper()
         
         # Filter to keep only genes in seed_genes
@@ -83,11 +74,6 @@ def load_and_preprocess_train_data(
     if sample_df.isna().any().any():
         n_nan = int(sample_df.isna().sum().sum())
         print(f"Warning: {n_nan} non-numeric values found in sample columns; coercing to NaN and imputing 0.")
-        try:
-            example_nan = sample_df.columns[sample_df.isna().any()].tolist()[:5]
-            print(f"Columns with NaNs (examples): {example_nan}")
-        except Exception:
-            pass
     expression_data = sample_df.values.T
 
     print(f"Initial data shape: {expression_data.shape}")
@@ -95,85 +81,8 @@ def load_and_preprocess_train_data(
     expression_data = blunt_percentile(expression_data, percent=blunt_percent)
     print(f"Shape after blunt_percentile: {expression_data.shape}")
 
-    gene_means = np.mean(expression_data, axis=0)
-    gene_stds = np.std(expression_data, axis=0)
-    gene_cvs = gene_stds / (gene_means + 1e-8)
-    mean_rank = np.argsort(np.argsort(-gene_means))
-    initial_keep = (gene_cvs > min_cv) & (gene_cvs < max_cv) & (mean_rank < min_mean_rank)
-
-    expression_data_initial_filtered = expression_data[:, initial_keep]
-    initial_filtered_gene_symbols = initial_gene_symbols[initial_keep]
-    print(f"Shape after initial CV/Mean filtering: {expression_data_initial_filtered.shape}")
-
-    if expression_data_initial_filtered.shape[1] == 0:
-        print("Warning: Initial CV/Mean filtering removed all genes. Falling back to keep all genes.")
-        final_keep_mask = np.ones_like(initial_keep, dtype=bool)
-        final_gene_symbols = initial_gene_symbols
-        expression_data_final_filtered = expression_data[:, final_keep_mask]
-        fallback_initial_filter = True
-    else:
-        fallback_initial_filter = False
-
-    if not fallback_initial_filter:
-        final_keep_mask = initial_keep
-        final_gene_symbols = initial_filtered_gene_symbols
-        expression_data_final_filtered = expression_data_initial_filtered
-
-    if use_oscope_filter:
-        print("Applying Oscope-inspired pair filtering...")
-        if expression_data_initial_filtered.shape[1] <= 1:
-             print("Skipping Oscope filter: Not enough genes after initial filtering.")
-        else:
-            scaler_filter = StandardScaler()
-            expression_scaled_filter = scaler_filter.fit_transform(expression_data_initial_filtered)
-
-            print("Calculating correlation matrix...")
-            try:
-                corr_matrix = np.corrcoef(expression_scaled_filter.astype(np.float64), rowvar=False)
-            except MemoryError:
-                 print("MemoryError calculating full correlation matrix. Consider reducing genes or using incremental methods.")
-                 raise
-            corr_matrix = np.nan_to_num(corr_matrix)
-            n_filtered_genes = corr_matrix.shape[0]
-            print(f"Correlation matrix shape: {corr_matrix.shape}")
-
-            print("Identifying good pairs and counting gene occurrences...")
-            gene_pair_counts = np.zeros(n_filtered_genes, dtype=int)
-            abs_corr = np.abs(corr_matrix)
-            triu_mask = np.triu(np.ones_like(abs_corr, dtype=bool), k=1)
-            corr_range_mask = (abs_corr > min_pair_corr) & (abs_corr < max_pair_corr)
-            valid_pair_mask = triu_mask & corr_range_mask
-            row_indices, col_indices = np.where(valid_pair_mask)
-            np.add.at(gene_pair_counts, row_indices, 1)
-            np.add.at(gene_pair_counts, col_indices, 1)
-            n_good_pairs = len(row_indices)
-            print(f"Found {n_good_pairs} pairs with abs(corr) between {min_pair_corr} and {max_pair_corr}.")
-            oscope_keep_mask_relative = gene_pair_counts >= min_gene_pairs
-            n_oscope_genes = np.sum(oscope_keep_mask_relative)
-            print(f"Found {n_oscope_genes} genes participating in at least {min_gene_pairs} good pairs.")
-
-            if n_oscope_genes == 0:
-                print("Warning: Oscope filter removed all initially filtered genes. Reverting to initial CV/Mean filter.")
-            elif n_oscope_genes < n_components:
-                print(f"Warning: Oscope filter resulted in only {n_oscope_genes} genes, less than n_components={n_components}.")
-                initial_indices = np.where(initial_keep)[0]
-                oscope_kept_indices = initial_indices[oscope_keep_mask_relative]
-                oscope_keep_mask_final = np.zeros_like(initial_keep, dtype=bool)
-                oscope_keep_mask_final[oscope_kept_indices] = True
-                final_keep_mask = oscope_keep_mask_final
-            else:
-                initial_indices = np.where(initial_keep)[0]
-                oscope_kept_indices = initial_indices[oscope_keep_mask_relative]
-                oscope_keep_mask_final = np.zeros_like(initial_keep, dtype=bool)
-                oscope_keep_mask_final[oscope_kept_indices] = True
-                final_keep_mask = oscope_keep_mask_final
-
-            final_gene_symbols = initial_gene_symbols[final_keep_mask]
-            expression_data_final_filtered = expression_data[:, final_keep_mask]
-            print(f"Shape after Oscope filtering: {expression_data_final_filtered.shape}")
-
-            del expression_scaled_filter, corr_matrix, abs_corr, triu_mask, corr_range_mask, valid_pair_mask
-            gc.collect()
+    final_gene_symbols = initial_gene_symbols
+    expression_data_final_filtered = expression_data
 
     if expression_data_final_filtered.shape[1] == 0:
         raise ValueError("All genes were removed after all filtering steps.")
@@ -208,14 +117,8 @@ def load_and_preprocess_train_data(
         'pca_model': pca_model,
         'sample_columns': sample_columns,
         'n_components': actual_n_components,
-        'gene_keep_mask': final_keep_mask,
         'final_gene_symbols': final_gene_symbols,
-        'blunt_percent': blunt_percent,
-        'use_oscope_filter': use_oscope_filter,
-        'min_pair_corr': min_pair_corr,
-        'max_pair_corr': max_pair_corr,
-        'min_gene_pairs': min_gene_pairs,
-        'fallback_initial_filter': fallback_initial_filter
+        'blunt_percent': blunt_percent
     }
     return train_dataset, preprocessing_info
 

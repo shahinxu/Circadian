@@ -14,7 +14,7 @@ class SetPhaseAutoEncoder(nn.Module):
             dropout=dropout,
             activation='gelu',
             batch_first=True, 
-            norm_first=True
+            # norm_first=True
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         
