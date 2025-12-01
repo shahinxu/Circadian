@@ -9,7 +9,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import argparse
 import os
-from AE import PhaseAutoEncoder
+from AE import SetPhaseAutoEncoder
 from data_load import load_and_preprocess_train_data, load_and_preprocess_test_data
 from torch.utils.data import DataLoader
 from utils import predict_and_save_phases
@@ -54,51 +54,49 @@ def plot_express(components, phases, save_path, n_plot=None):
 
 
 def train_model(
-    model: PhaseAutoEncoder, train_dataset, preprocessing_info,
-    num_epochs=100, lr=1e-3, device='cuda',
-    lambda_recon=0.2,
-    save_dir='./model_checkpoints'):
-    
+    model: nn.Module, 
+    train_dataset, 
+    preprocessing_info,
+    num_epochs=100, 
+    lr=1e-3, 
+    device='cuda',
+    save_dir='./model_checkpoints'
+):
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=100)
-    recon_criterion = nn.MSELoss()
     
-    train_losses = []
     os.makedirs(save_dir, exist_ok=True)
-
+    train_losses = []
     all_expressions = [train_dataset[i]['expression'] for i in range(len(train_dataset))]
-    expressions_tensor = torch.stack(all_expressions).to(device)
-    
-    components = expressions_tensor.cpu().numpy().astype(np.float32)
-    order = greedy_ordering(components)
-    X_ordered = expressions_tensor
-    X_ordered = X_ordered / (torch.norm(X_ordered, dim=1, keepdim=True) + 1e-8)
-    
+    X_all = torch.stack(all_expressions).to(device)
+    X_all = X_all / (torch.norm(X_all, dim=1, keepdim=True) + 1e-8)
+    X_input = X_all.unsqueeze(0) 
+
     model.train()
     
     for epoch in range(num_epochs):
         optimizer.zero_grad()
-        _, pred_phases, recon = model(X_ordered)
-        recon_loss = 1 - F.cosine_similarity(recon, X_ordered, dim=1).mean()
-        total = lambda_recon * recon_loss
-        total.backward()
+        _, pred_phases, recon = model(X_input)
+        loss = 1 - F.cosine_similarity(recon, X_input, dim=2).mean()
+        
+        loss.backward()
         optimizer.step()
-        train_losses.append(total.item())
-        scheduler.step(total.item())
+        
+        loss_val = loss.item()
+        train_losses.append(loss_val)
+        scheduler.step(loss_val)
         
         if epoch % 50 == 0:
-            print(f"Epoch {epoch+1}/{num_epochs}, Recon Loss: {recon_loss.item():.4f}")
+            print(f"Epoch {epoch+1}/{num_epochs}, Cosine Loss: {loss_val:.4f}")
 
     model.eval()
     with torch.no_grad():
-        _, pred_phases, recon = model(X_ordered)
-    
-    pred_phases_np = pred_phases.detach().cpu().numpy()
+        _, pred_phases, recon = model(X_input)
+    pred_phases_np = pred_phases.squeeze(0).detach().cpu().numpy()
     pred_order_relative = np.argsort(pred_phases_np)
-    pred_order_original = order[pred_order_relative]
     
-    return model, pred_order_original
+    return model, pred_order_relative
 
 
 def evaluate_order_plot(
@@ -158,10 +156,10 @@ def main():
     parser.add_argument("--dataset_path", required=True)
     parser.add_argument("--n_components", type=int, default=5)
     parser.add_argument("--num_epochs", type=int, default=200)
-    parser.add_argument("--lr", type=float, default=0.1)
-    parser.add_argument("--lambda_recon", type=float, default=0.01)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--lambda_recon", type=float, default=0.1)
     parser.add_argument("--period_hours", type=float, default=24.0)
-    parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--device", default='cuda')
     parser.add_argument("--align_gene_symbols", type=str, default=None)
     parser.add_argument("--align_acrophases", type=str, default=None)
@@ -187,7 +185,7 @@ def main():
 
     preprocessing_info['period_hours'] = args.period_hours
 
-    model = PhaseAutoEncoder(
+    model = SetPhaseAutoEncoder(
         input_dim=preprocessing_info['n_components'],
         dropout=args.dropout
     )
@@ -199,7 +197,6 @@ def main():
         num_epochs=args.num_epochs,
         lr=args.lr,
         device=args.device,
-        lambda_recon=args.lambda_recon,
         save_dir=save_dir,
     )
 
