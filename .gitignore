@@ -30,3 +30,5 @@ output
 *.sh
 
 result*
+
+*.csv
