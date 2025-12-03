@@ -9,7 +9,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import argparse
 import os
-from AE import SetPhaseAutoEncoder
+from AE import ConditionalTOAST
 from data_load import load_and_preprocess_train_data, load_and_preprocess_test_data
 from torch.utils.data import DataLoader
 from utils import predict_and_save_phases
@@ -71,13 +71,26 @@ def train_model(
     all_expressions = [train_dataset[i]['expression'] for i in range(len(train_dataset))]
     X_all = torch.stack(all_expressions).to(device)
     X_all = X_all / (torch.norm(X_all, dim=1, keepdim=True) + 1e-8)
-    X_input = X_all.unsqueeze(0) 
+    X_input = X_all.unsqueeze(0)
+    
+    has_covariates = preprocessing_info.get('has_covariates', False)
+    if has_covariates:
+        all_covariates = [train_dataset[i]['covariates'] for i in range(len(train_dataset))]
+        cov_all = torch.stack(all_covariates).to(device)
+        cov_input = cov_all.unsqueeze(0)
+    else:
+        # 创建dummy协变量（全零）
+        batch_size, n_samples = 1, X_all.shape[0]
+        cov_input = torch.zeros(batch_size, n_samples, 0).to(device)
 
     model.train()
     
     for epoch in range(num_epochs):
         optimizer.zero_grad()
-        _, pred_phases, recon = model(X_input)
+        
+        # 始终传递协变量（有协变量时是真实值，无协变量时是空张量）
+        _, pred_phases, recon = model(X_input, cov_input)
+            
         loss = 1 - F.cosine_similarity(recon, X_input, dim=2).mean()
         
         loss.backward()
@@ -92,7 +105,8 @@ def train_model(
 
     model.eval()
     with torch.no_grad():
-        _, pred_phases, recon = model(X_input)
+        _, pred_phases, recon = model(X_input, cov_input)
+            
     pred_phases_np = pred_phases.squeeze(0).detach().cpu().numpy()
     pred_order_relative = np.argsort(pred_phases_np)
     
@@ -146,7 +160,18 @@ def evaluate_test_set(
 
     model.eval()
     with torch.no_grad():
-        _, pred_phases, recon = model(X_input)
+        # 检查是否有协变量
+        has_covariates = preprocessing_info.get('has_covariates', False)
+        if has_covariates:
+            all_covariates = [test_dataset[i]['covariates'] for i in range(len(test_dataset))]
+            cov_input = torch.stack(all_covariates).unsqueeze(0).to(device)
+        else:
+            # 创建dummy协变量（全零）
+            batch_size, n_samples = 1, X_test.shape[0]
+            cov_input = torch.zeros(batch_size, n_samples, 0).to(device)
+        
+        _, pred_phases, recon = model(X_input, cov_input)
+            
     pred_phases_np = pred_phases.squeeze(0).cpu().numpy()
     
     period = preprocessing_info.get('period_hours', 24.0)
@@ -208,8 +233,21 @@ def main():
 
     preprocessing_info['period_hours'] = args.period_hours
 
-    model = SetPhaseAutoEncoder(
+    # 统一使用ConditionalTOAST，无协变量时传入空配置使其退化
+    has_covariates = preprocessing_info.get('has_covariates', False)
+    if has_covariates:
+        continuous_dims = preprocessing_info['continuous_dims']
+        categorical_cards = preprocessing_info['categorical_cards']
+        print(f"Using ConditionalTOAST with {continuous_dims} continuous and {len(categorical_cards)} categorical covariates")
+    else:
+        continuous_dims = 0
+        categorical_cards = []
+        print("Using ConditionalTOAST (no covariates - degenerated mode)")
+    
+    model = ConditionalTOAST(
         input_dim=preprocessing_info['n_components'],
+        continuous_dims=continuous_dims,
+        categorical_cards=categorical_cards,
         dropout=args.dropout
     )
 

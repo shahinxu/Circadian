@@ -11,7 +11,27 @@ logger = logging.getLogger(__name__)
 def time_to_phase(time_hours, period_hours=24.0):
     return 2 * np.pi * time_hours / period_hours
 
-def _run_inference(model, test_loader, device):
+def circular_correlation_jr(alpha, beta):
+    alpha = np.asarray(alpha, dtype=float)
+    beta = np.asarray(beta, dtype=float)
+    
+    mask = np.isfinite(alpha) & np.isfinite(beta)
+    alpha = alpha[mask]
+    beta = beta[mask]
+    if len(alpha) < 2:
+        return np.nan
+    alpha_bar = np.arctan2(np.mean(np.sin(alpha)), np.mean(np.cos(alpha)))
+    beta_bar = np.arctan2(np.mean(np.sin(beta)), np.mean(np.cos(beta)))
+    sin_alpha = np.sin(alpha - alpha_bar)
+    sin_beta = np.sin(beta - beta_bar)
+    numerator = np.sum(sin_alpha * sin_beta)
+    denominator = np.sqrt(np.sum(sin_alpha**2) * np.sum(sin_beta**2))
+    if denominator == 0:
+        return np.nan
+    rho = abs(numerator) / denominator
+    return float(rho)
+
+def _run_inference(model, test_loader, device, has_covariates=False):
     all_phase_coords = []
     all_phases = []
 
@@ -19,7 +39,19 @@ def _run_inference(model, test_loader, device):
     with torch.no_grad():
         for batch in test_loader:
             expressions = batch['expression'].to(device)
-            phase_coords, phase_angles, _ = model(expressions)
+            
+            if has_covariates and 'covariates' in batch:
+                covariates = batch['covariates'].to(device)
+                if covariates.dim() == 2:
+                    covariates = covariates.unsqueeze(0)
+            else:
+                if expressions.dim() == 3:
+                    batch_size, n_samples = expressions.shape[0], expressions.shape[1]
+                else:
+                    batch_size, n_samples = 1, expressions.shape[0]
+                covariates = torch.zeros(batch_size, n_samples, 0).to(device)
+            
+            phase_coords, phase_angles, _ = model(expressions, covariates)
 
             all_phase_coords.append(phase_coords.cpu().numpy())
             all_phases.append(phase_angles.cpu().numpy())
@@ -44,9 +76,6 @@ def _assemble_results_df(phase_coords, phases, preprocessing_info, sample_names=
         'Predicted_Phase_Degrees': phases * 180 / np.pi,
         'Predicted_Phase_Hours': phases * preprocessing_info.get('period_hours', 24.0) / (2 * np.pi)
     }
-
-    # Note: time columns removed; dataset does not provide them
-
     return pd.DataFrame(results_data)
 
 
@@ -71,8 +100,9 @@ def predict_and_save_phases(
     logger.info("Predicting test-set phases")
 
     sample_names = preprocessing_info.get('test_sample_columns', [])
+    has_covariates = preprocessing_info.get('has_covariates', False)
 
-    phase_coords, phases = _run_inference(model, test_loader, device)
+    phase_coords, phases = _run_inference(model, test_loader, device, has_covariates=has_covariates)
 
     os.makedirs(save_dir, exist_ok=True)
 
@@ -368,6 +398,9 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     r = float(pearsonr(aligned_rad, metadata_rad)[0])
     spearman_R = float(spearmanr(aligned_rad, metadata_rad)[0])
     r2 = r * r if np.isfinite(r) else float('nan')
+    circ_r = circular_correlation_jr(phase_rad, metadata_rad)
+    path_parts = [p for p in save_dir.replace('\\', '/').split('/') if p]
+    dataset_name = path_parts[-2] if len(path_parts) >= 2 else path_parts[-1]
 
     plt.figure(figsize=(8, 7))
     plt.grid(True, linestyle='-')
@@ -378,6 +411,7 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     plt.ylim(0, two_pi)
     plt.xlabel('Collection Phase', fontsize=24)
     plt.ylabel('Predicted Phase', fontsize=24)
+    plt.title(f"{dataset_name}, JR cor: {circ_r:.2f}", fontsize=24)
 
     plt.tight_layout()
 
@@ -385,10 +419,10 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close()
 
-    print(f"Pearson R={r:.2f}, Spearman ρ={spearman_R:.2f}")
+    print(f"Pearson R={r:.2f}, Spearman ρ={spearman_R:.2f}, Circular R={circ_r:.2f}")
     print(f"plot saved in: {out_path}")
 
-    return out_path, r, r2, spearman_R
+    return out_path, r, r2, spearman_R, circ_r
 
 
 # rank_loss and its helper were removed per new training logic (align loss no longer used)

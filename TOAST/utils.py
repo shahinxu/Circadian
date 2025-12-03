@@ -11,6 +11,26 @@ logger = logging.getLogger(__name__)
 def time_to_phase(time_hours, period_hours=24.0):
     return 2 * np.pi * time_hours / period_hours
 
+def circular_correlation_jr(alpha, beta):
+    alpha = np.asarray(alpha, dtype=float)
+    beta = np.asarray(beta, dtype=float)
+    
+    mask = np.isfinite(alpha) & np.isfinite(beta)
+    alpha = alpha[mask]
+    beta = beta[mask]
+    if len(alpha) < 2:
+        return np.nan
+    alpha_bar = np.arctan2(np.mean(np.sin(alpha)), np.mean(np.cos(alpha)))
+    beta_bar = np.arctan2(np.mean(np.sin(beta)), np.mean(np.cos(beta)))
+    sin_alpha = np.sin(alpha - alpha_bar)
+    sin_beta = np.sin(beta - beta_bar)
+    numerator = np.sum(sin_alpha * sin_beta)
+    denominator = np.sqrt(np.sum(sin_alpha**2) * np.sum(sin_beta**2))
+    if denominator == 0:
+        return np.nan
+    rho = abs(numerator) / denominator
+    return float(rho)
+
 def _run_inference(model, test_loader, device):
     all_phase_coords = []
     all_phases = []
@@ -368,7 +388,9 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     r = float(pearsonr(aligned_rad, metadata_rad)[0])
     spearman_R = float(spearmanr(aligned_rad, metadata_rad)[0])
     r2 = r * r if np.isfinite(r) else float('nan')
-
+    circ_r = circular_correlation_jr(phase_rad, metadata_rad)
+    path_parts = [p for p in save_dir.replace('\\', '/').split('/') if p]
+    dataset_name = path_parts[-2] if len(path_parts) >= 2 else path_parts[-1]
     plt.figure(figsize=(8, 7))
     plt.grid(True, linestyle='-')
     plt.scatter(metadata_rad, aligned_rad, c='r', s=100)
@@ -378,6 +400,7 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     plt.ylim(0, two_pi)
     plt.xlabel('Collection Phase', fontsize=24)
     plt.ylabel('Predicted Phase', fontsize=24)
+    plt.title(f"{dataset_name}, JR cor: {circ_r:.2f}", fontsize=24)
 
     plt.tight_layout()
 
