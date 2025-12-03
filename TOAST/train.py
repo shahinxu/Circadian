@@ -17,24 +17,6 @@ from utils import align_predictions_to_gene_acrophases
 from datetime import datetime
 import torch.nn.functional as F
 
-def greedy_ordering(components: np.ndarray):
-    n = components.shape[0]
-    visited = np.zeros(n, dtype=bool)
-    order = []
-    start = np.argmin(np.sum(np.abs(components), axis=1))
-    cur = start
-    order.append(cur)
-    visited[cur] = True
-    for _ in range(n - 1):
-        diffs = np.abs(components - components[cur:cur+1, :])
-        dists = np.sum(diffs, axis=1)
-        dists[visited] = np.inf
-        nxt = np.argmin(dists)
-        order.append(nxt)
-        visited[nxt] = True
-        cur = nxt
-    return np.array(order, dtype=int)
-
 def plot_express(components, phases, save_path, n_plot=None):
     order = np.argsort(phases)
     phases_sorted = phases[order]
@@ -117,8 +99,7 @@ def evaluate_order_plot(
         'Predicted_Order': pred_order,
         'Predicted_Phase_Hours': pred_hours
     })
-    save_greedy = os.path.join(save_dir + '_greedy') if save_dir else save_dir + '_greedy'
-    return plot_comparsion(order_df, metadata_path, save_greedy)
+    return plot_comparsion(order_df, metadata_path, save_dir)
 
 
 def evaluate_test_set(
@@ -221,14 +202,6 @@ def main():
         lr=args.lr,
         device=args.device,
         save_dir=save_dir,
-    )
-
-    evaluate_order_plot(
-        pred_order, 
-        preprocessing_info, 
-        metadata, 
-        save_dir, 
-        period_hours=args.period_hours
     )
 
     print("Generating final predictions and comparison plot in main save_dir...")

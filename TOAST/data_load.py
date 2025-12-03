@@ -74,12 +74,18 @@ def load_and_preprocess_train_data(
     if sample_df.isna().any().any():
         n_nan = int(sample_df.isna().sum().sum())
         print(f"Warning: {n_nan} non-numeric values found in sample columns; coercing to NaN and imputing 0.")
+        sample_df = sample_df.fillna(0.0)
     expression_data = sample_df.values.T
 
     print(f"Initial data shape: {expression_data.shape}")
 
     expression_data = blunt_percentile(expression_data, percent=blunt_percent)
     print(f"Shape after blunt_percentile: {expression_data.shape}")
+    
+    # Ensure no NaN values remain after blunt_percentile
+    if np.isnan(expression_data).any():
+        print(f"Warning: NaN values detected after blunt_percentile, filling with 0.")
+        expression_data = np.nan_to_num(expression_data, nan=0.0)
 
     final_gene_symbols = initial_gene_symbols
     expression_data_final_filtered = expression_data
