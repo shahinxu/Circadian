@@ -4,6 +4,8 @@ import torch
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
 import gc
+import matplotlib.pyplot as plt
+import os
 
 
 class ExpressionDataset(Dataset):
@@ -15,6 +17,95 @@ class ExpressionDataset(Dataset):
 
     def __getitem__(self, idx):
         return {'expression': self.expressions[idx]}
+
+
+def plot_expression_over_time(expression_scaled, metadata_file, gene_symbols, save_dir, n_genes=20):
+    """
+    Plot normalized expression curves over time for selected genes.
+    
+    Parameters:
+    -----------
+    expression_scaled : np.ndarray
+        Normalized expression data with shape (n_samples, n_genes)
+    metadata_file : str
+        Path to metadata.csv containing Time_Hours column
+    gene_symbols : list or np.ndarray
+        Gene symbols corresponding to columns in expression_scaled
+    save_dir : str
+        Directory to save the plot
+    n_genes : int
+        Number of genes to plot (default: 20, randomly selected)
+    """
+    if not os.path.exists(metadata_file):
+        print(f"Metadata file not found: {metadata_file}")
+        return
+    
+    # Read metadata
+    metadata = pd.read_csv(metadata_file)
+    if 'Time_Hours' not in metadata.columns:
+        print("Time_Hours column not found in metadata")
+        return
+    
+    # Check dimensions match
+    if len(metadata) != expression_scaled.shape[0]:
+        print(f"Warning: Metadata samples ({len(metadata)}) != Expression samples ({expression_scaled.shape[0]})")
+        return
+    
+    # Create dataframe
+    df = pd.DataFrame(expression_scaled, columns=gene_symbols)
+    df['Time_Hours'] = metadata['Time_Hours'].values
+    
+    # Select genes to plot
+    n_genes = min(n_genes, len(gene_symbols))
+    np.random.seed(42)
+    selected_indices = np.random.choice(len(gene_symbols), n_genes, replace=False)
+    selected_genes = [gene_symbols[i] for i in selected_indices]
+    
+    time_points = sorted(df['Time_Hours'].unique())
+    
+    # Create plot with subplots
+    n_cols = 4
+    n_rows = (n_genes + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 4*n_rows))
+    axes = axes.flatten() if n_genes > 1 else [axes]
+    
+    for idx, gene in enumerate(selected_genes):
+        ax = axes[idx]
+        means = []
+        stds = []
+        
+        for t in time_points:
+            values = df[df['Time_Hours'] == t][gene]
+            means.append(values.mean())
+            stds.append(values.std())
+        
+        means = np.array(means)
+        stds = np.array(stds)
+        
+        # Plot with error bars
+        ax.errorbar(time_points, means, yerr=stds, 
+                   marker='o', linewidth=2, capsize=5,
+                   label=f'{gene}')
+        ax.set_xlabel('Time (Hours)', fontsize=10)
+        ax.set_ylabel('Normalized Expression', fontsize=10)
+        ax.set_title(f'{gene}', fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.set_xticks(time_points)
+    
+    # Hide unused subplots
+    for idx in range(n_genes, len(axes)):
+        axes[idx].axis('off')
+    
+    plt.tight_layout()
+    
+    # Save plot
+    os.makedirs(save_dir, exist_ok=True)
+    plot_path = os.path.join(save_dir, 'expression_scaled_over_time.png')
+    plt.savefig(plot_path, dpi=200, bbox_inches='tight')
+    plt.close()
+    
+    print(f"\nExpression time course plot saved to: {plot_path}")
+    print(f"Plotted {n_genes} genes across {len(time_points)} time points")
 
 
 def blunt_percentile(data, percent=0.975):
@@ -93,6 +184,13 @@ def load_and_preprocess_train_data(
 
     final_scaler = StandardScaler()
     expression_scaled = final_scaler.fit_transform(expression_data_final_filtered)
+
+    # Plot expression over time before feeding to Transformer
+    metadata_path = os.path.join(train_dir, 'metadata.csv')
+    if os.path.exists(metadata_path):
+        plot_save_dir = os.path.join(train_dir, 'expression_analysis')
+        plot_expression_over_time(expression_scaled, metadata_path, final_gene_symbols, 
+                                 plot_save_dir, n_genes=20)
 
     print("Using normalized expression directly (no PCA)...")
     print(f"Expression scaled shape: {expression_scaled.shape}")
