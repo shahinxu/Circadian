@@ -3,7 +3,6 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
-from PCA import create_eigengenes
 import gc
 
 
@@ -95,33 +94,17 @@ def load_and_preprocess_train_data(
     final_scaler = StandardScaler()
     expression_scaled = final_scaler.fit_transform(expression_data_final_filtered)
 
-    print("Performing PCA...")
-    actual_n_components = min(n_components, expression_scaled.shape[1], expression_scaled.shape[0])
-    if actual_n_components < n_components:
-        print(f"Warning: Reducing n_components from {n_components} to {actual_n_components} due to limited features ({expression_scaled.shape[1]}) or samples ({expression_scaled.shape[0]}) after filtering.")
-    if actual_n_components <= 0:
-         raise ValueError("Cannot perform PCA with 0 components.")
+    print("Using normalized expression directly (no PCA)...")
+    print(f"Expression scaled shape: {expression_scaled.shape}")
+    print(f"Number of features (genes): {expression_scaled.shape[1]}")
+    print(f"Number of samples: {expression_scaled.shape[0]}")
 
-    try:
-        pca_components, pca_model, explained_variance_ratios = create_eigengenes(expression_scaled, actual_n_components)
-        print(f"PCA output shape: {pca_components.shape}")
-        if isinstance(explained_variance_ratios, np.ndarray):
-             print(f"Explained variance by {actual_n_components} components: {np.sum(explained_variance_ratios):.4f}")
-        else:
-             print(f"Explained variance by {actual_n_components} components: {explained_variance_ratios:.4f}")
-
-    except Exception as e:
-         print(f"Error during PCA: {e}")
-         print(f"Data shape fed to PCA: {expression_scaled.shape}")
-         raise
-
-    train_dataset = ExpressionDataset(pca_components)
+    train_dataset = ExpressionDataset(expression_scaled)
 
     preprocessing_info = {
         'scaler': final_scaler,
-        'pca_model': pca_model,
         'sample_columns': sample_columns,
-        'n_components': actual_n_components,
+        'n_features': expression_scaled.shape[1],
         'final_gene_symbols': final_gene_symbols,
         'blunt_percent': blunt_percent
     }
@@ -157,18 +140,15 @@ def load_and_preprocess_test_data(test_file, preprocessing_info):
 
     scaler = preprocessing_info['scaler']
     test_expression_scaled = scaler.transform(test_expression_data)
-    pca_model = preprocessing_info['pca_model']
-    actual_n_components = preprocessing_info['n_components']
-    test_pca_components = pca_model.transform(test_expression_scaled)
 
-    print(f"Test data after PCA shape: {test_pca_components.shape}")
-    print(f"Expected n_components: {actual_n_components}")
+    print(f"Test data after normalization shape: {test_expression_scaled.shape}")
+    print(f"Number of features: {test_expression_scaled.shape[1]}")
 
-    test_dataset = ExpressionDataset(test_pca_components)
+    test_dataset = ExpressionDataset(test_expression_scaled)
 
     test_preprocessing_info = preprocessing_info.copy()
     test_preprocessing_info.update({
         'test_sample_columns': available_sample_columns,
-        'test_pca_components': test_pca_components
+        'test_expression_scaled': test_expression_scaled
     })
     return test_dataset, test_preprocessing_info
