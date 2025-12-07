@@ -1,12 +1,6 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import math
-
-# ==========================================
-# Part 1: 非学习型编码器组件 (Frozen Encoders)
-# ==========================================
-
 class FrozenContinuousEncoder(nn.Module):
     def __init__(self, d_model, max_val=100.0):
         super().__init__()

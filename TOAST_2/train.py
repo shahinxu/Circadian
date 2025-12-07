@@ -202,7 +202,6 @@ def evaluate_test_set(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", required=True)
-    parser.add_argument("--n_components", type=int, default=5)
     parser.add_argument("--num_epochs", type=int, default=200)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--lambda_recon", type=float, default=0.1)
@@ -228,7 +227,7 @@ def main():
     os.makedirs(save_dir, exist_ok=True)
 
     train_dataset, preprocessing_info = load_and_preprocess_train_data(
-        train_file, n_components=args.n_components
+        train_file
     )
 
     preprocessing_info['period_hours'] = args.period_hours
@@ -245,7 +244,7 @@ def main():
         print("Using ConditionalTOAST (no covariates - degenerated mode)")
     
     model = ConditionalTOAST(
-        input_dim=preprocessing_info['n_components'],
+        input_dim=preprocessing_info['input_dim'],
         continuous_dims=continuous_dims,
         categorical_cards=categorical_cards,
         dropout=args.dropout
