@@ -117,7 +117,8 @@ def load_and_preprocess_metadata(metadata_file, sample_columns):
 
 def load_and_preprocess_train_data(
         train_file,
-        blunt_percent=0.975
+        blunt_percent=0.975,
+        pathway_csv=None
     ):
     print("=== Loading training data ===")
     df = pd.read_csv(train_file, low_memory=False)
@@ -128,28 +129,8 @@ def load_and_preprocess_train_data(
     train_dir = os.path.dirname(train_file)
     seed_genes_path = os.path.join(train_dir, 'seed_genes.txt')
     
-    if os.path.exists(seed_genes_path):
-        print(f"Loading seed genes from {seed_genes_path}")
-        with open(seed_genes_path, 'r') as f:
-            seed_genes = set(line.strip().upper() for line in f if line.strip())
-        print(f"Found {len(seed_genes)} seed genes")
-        
-        gene_df['Gene_Symbol_Upper'] = gene_df['Gene_Symbol'].str.upper()
-        
-        # Filter to keep only genes in seed_genes
-        before_filter = len(gene_df)
-        gene_df = gene_df[gene_df['Gene_Symbol_Upper'].isin(seed_genes)].copy()
-        after_filter = len(gene_df)
-        
-        print(f"Filtered genes: {before_filter} -> {after_filter} (kept {after_filter} seed genes)")
-        
-        # Remove the temporary uppercase column
-        gene_df = gene_df.drop(columns=['Gene_Symbol_Upper'])
-        
-        if len(gene_df) == 0:
-            raise ValueError("No genes remain after filtering with seed_genes.txt")
-    else:
-        print("No seed_genes.txt found, processing all genes")
+    # Skip seed genes filtering - use all genes
+    print(f"Using all {len(gene_df)} genes (seed_genes.txt ignored if present)")
     
     initial_gene_symbols = gene_df['Gene_Symbol'].values
     sample_df = gene_df[sample_columns].copy()
@@ -182,6 +163,32 @@ def load_and_preprocess_train_data(
 
     train_dataset = ExpressionDataset(expression_scaled, covariates_data)
 
+    # Load pathway information if provided
+    pathway_info = None
+    if pathway_csv and os.path.exists(pathway_csv):
+        print(f"Loading pathway information from {pathway_csv}")
+        from pathway_loader import load_pathway_dataset, build_pathway_map, get_pathway_statistics
+        
+        pathway_df = load_pathway_dataset(pathway_csv)
+        pathway_indices, pathway_names, gene_to_idx = build_pathway_map(
+            pathway_df, 
+            final_gene_symbols.tolist(),
+            min_pathway_size=100,
+            max_pathway_size=500
+        )
+        
+        pathway_stats = get_pathway_statistics(pathway_indices, pathway_names)
+        print(f"Pathway statistics:\n{pathway_stats.head(10)}")
+        
+        pathway_info = {
+            'pathway_indices': pathway_indices,
+            'pathway_names': pathway_names,
+            'gene_to_idx': gene_to_idx,
+            'pathway_stats': pathway_stats
+        }
+    else:
+        print("No pathway information provided, using standard model")
+
     preprocessing_info = {
         'scaler': final_scaler,
         'sample_columns': sample_columns,
@@ -191,7 +198,8 @@ def load_and_preprocess_train_data(
         'categorical_cards': categorical_cards,
         'covariate_info': covariate_info,
         'has_covariates': covariates_data is not None,
-        'input_dim': expression_scaled.shape[1]  # Number of genes
+        'input_dim': expression_scaled.shape[1],  # Number of genes
+        'pathway_info': pathway_info
     }
     return train_dataset, preprocessing_info
 

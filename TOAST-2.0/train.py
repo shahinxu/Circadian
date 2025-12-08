@@ -9,13 +9,17 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import argparse
 import os
-from AE import ConditionalTOAST
+from pathway_model import PathwayAutoencoderWithTissue
 from data_load import load_and_preprocess_train_data, load_and_preprocess_test_data
-from torch.utils.data import DataLoader
-from utils import predict_and_save_phases
 from utils import align_predictions_to_gene_acrophases
 from datetime import datetime
 import torch.nn.functional as F
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("[WARN] wandb not installed. Run: pip install wandb")
 
 def greedy_ordering(components: np.ndarray):
     n = components.shape[0]
@@ -60,7 +64,8 @@ def train_model(
     num_epochs=100, 
     lr=1e-3, 
     device='cuda',
-    save_dir='./model_checkpoints'
+    save_dir='./model_checkpoints',
+    use_wandb=False
 ):
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
@@ -73,23 +78,15 @@ def train_model(
     X_all = X_all / (torch.norm(X_all, dim=1, keepdim=True) + 1e-8)
     X_input = X_all.unsqueeze(0)
     
-    has_covariates = preprocessing_info.get('has_covariates', False)
-    if has_covariates:
-        all_covariates = [train_dataset[i]['covariates'] for i in range(len(train_dataset))]
-        cov_all = torch.stack(all_covariates).to(device)
-        cov_input = cov_all.unsqueeze(0)
-    else:
-        # 创建dummy协变量（全零）
-        batch_size, n_samples = 1, X_all.shape[0]
-        cov_input = torch.zeros(batch_size, n_samples, 0).to(device)
+    batch_size, n_samples = 1, X_all.shape[0]
+    tissue_idx = torch.zeros(batch_size, n_samples, dtype=torch.long).to(device)
 
     model.train()
     
     for epoch in range(num_epochs):
         optimizer.zero_grad()
         
-        # 始终传递协变量（有协变量时是真实值，无协变量时是空张量）
-        _, pred_phases, recon = model(X_input, cov_input)
+        _, pred_phases, recon = model(X_input, tissue_idx)
             
         loss = 1 - F.cosine_similarity(recon, X_input, dim=2).mean()
         
@@ -100,12 +97,46 @@ def train_model(
         train_losses.append(loss_val)
         scheduler.step(loss_val)
         
+        # Compute metrics
+        with torch.no_grad():
+            phases_np = pred_phases.squeeze(0).cpu().numpy()
+            phase_std = np.std(phases_np)
+            phase_range = phases_np.max() - phases_np.min()
+            
+            # Circular variance (0=all same, 1=uniform)
+            complex_phases = np.exp(1j * phases_np)
+            circular_mean = np.abs(complex_phases.mean())
+            circular_variance = 1 - circular_mean
+            
+            # Phase coherence (consecutive phase differences)
+            sorted_phases = np.sort(phases_np)
+            phase_diffs = np.diff(sorted_phases)
+            phase_coherence = 1.0 / (1.0 + np.std(phase_diffs))
+            
+            # Reconstruction MSE
+            mse = F.mse_loss(recon, X_input).item()
+            
+        metrics = {
+            'epoch': epoch + 1,
+            'loss/cosine': loss_val,
+            'loss/mse': mse,
+            'phase/std': phase_std,
+            'phase/range': phase_range,
+            'phase/circular_variance': circular_variance,
+            'phase/coherence': phase_coherence,
+            'lr': optimizer.param_groups[0]['lr']
+        }
+        
+        if use_wandb and WANDB_AVAILABLE:
+            wandb.log(metrics)
+        
         if epoch % 50 == 0:
-            print(f"Epoch {epoch+1}/{num_epochs}, Cosine Loss: {loss_val:.4f}")
+            print(f"Epoch {epoch+1}/{num_epochs}, Cosine Loss: {loss_val:.4f}, "
+                  f"MSE: {mse:.4f}, Phase Std: {phase_std:.4f}, Circ Var: {circular_variance:.4f}")
 
     model.eval()
     with torch.no_grad():
-        _, pred_phases, recon = model(X_input, cov_input)
+        _, pred_phases, recon = model(X_input, tissue_idx)
             
     pred_phases_np = pred_phases.squeeze(0).detach().cpu().numpy()
     pred_order_relative = np.argsort(pred_phases_np)
@@ -160,13 +191,11 @@ def evaluate_test_set(
 
     model.eval()
     with torch.no_grad():
-        # 检查是否有协变量
         has_covariates = preprocessing_info.get('has_covariates', False)
         if has_covariates:
             all_covariates = [test_dataset[i]['covariates'] for i in range(len(test_dataset))]
             cov_input = torch.stack(all_covariates).unsqueeze(0).to(device)
         else:
-            # 创建dummy协变量（全零）
             batch_size, n_samples = 1, X_test.shape[0]
             cov_input = torch.zeros(batch_size, n_samples, 0).to(device)
         
@@ -202,7 +231,7 @@ def evaluate_test_set(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", required=True)
-    parser.add_argument("--num_epochs", type=int, default=200)
+    parser.add_argument("--num_epochs", type=int, default=500)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--lambda_recon", type=float, default=0.1)
     parser.add_argument("--period_hours", type=float, default=24.0)
@@ -211,6 +240,16 @@ def main():
     parser.add_argument("--align_gene_symbols", type=str, default=None)
     parser.add_argument("--align_acrophases", type=str, default=None)
     parser.add_argument("--random_seed", type=int, default=42)
+    parser.add_argument("--pathway_csv", type=str, default="../pathway_dataset/dataset.csv",
+                        help="Path to pathway dataset CSV")
+    parser.add_argument("--embed_dim", type=int, default=128,
+                        help="Embedding dimension for pathway model")
+    parser.add_argument("--wandb", action='store_true', default=True,
+                        help="Enable Weights & Biases logging")
+    parser.add_argument("--no_wandb", action='store_false', dest='wandb',
+                        help="Disable Weights & Biases logging")
+    parser.add_argument("--wandb_project", type=str, default="circadian-pathway",
+                        help="W&B project name")
     args = parser.parse_args()
 
     base_data = f"../data/{args.dataset_path}"
@@ -222,33 +261,56 @@ def main():
     torch.manual_seed(args.random_seed)
     np.random.seed(args.random_seed)
     if args.device == 'cuda' and not torch.cuda.is_available():
+        print("CUDA not available, falling back to CPU")
         args.device = 'cpu'
+    else:
+        if args.device == 'cuda':
+            print(f"Using device: {args.device}")
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        else:
+            print(f"Using device: {args.device}")
 
     os.makedirs(save_dir, exist_ok=True)
 
     train_dataset, preprocessing_info = load_and_preprocess_train_data(
-        train_file
+        train_file,
+        pathway_csv=args.pathway_csv
     )
 
     preprocessing_info['period_hours'] = args.period_hours
 
-    # 统一使用ConditionalTOAST，无协变量时传入空配置使其退化
-    has_covariates = preprocessing_info.get('has_covariates', False)
-    if has_covariates:
-        continuous_dims = preprocessing_info['continuous_dims']
-        categorical_cards = preprocessing_info['categorical_cards']
-        print(f"Using ConditionalTOAST with {continuous_dims} continuous and {len(categorical_cards)} categorical covariates")
-    else:
-        continuous_dims = 0
-        categorical_cards = []
-        print("Using ConditionalTOAST (no covariates - degenerated mode)")
+    pathway_info = preprocessing_info.get('pathway_info', None)
     
-    model = ConditionalTOAST(
+    if pathway_info is None:
+        raise ValueError("Pathway information not found! Must use --use_pathway_model with --pathway_csv")
+    
+    print("="*50)
+    print("Pathway-Based Attention Model")
+    print("="*50)
+    
+    model = PathwayAutoencoderWithTissue(
         input_dim=preprocessing_info['input_dim'],
-        continuous_dims=continuous_dims,
-        categorical_cards=categorical_cards,
+        pathway_map=pathway_info['pathway_indices'],
+        num_tissues=1,
+        embed_dim=args.embed_dim,
         dropout=args.dropout
     )
+    print(f"Initialized: {len(pathway_info['pathway_names'])} pathways, {args.embed_dim}D embeddings")
+
+    if args.wandb and WANDB_AVAILABLE:
+        wandb.init(
+            project=args.wandb_project,
+            config={
+                'dataset': args.dataset_path,
+                'num_epochs': args.num_epochs,
+                'lr': args.lr,
+                'embed_dim': args.embed_dim,
+                'dropout': args.dropout,
+                'num_pathways': len(pathway_info['pathway_names']),
+                'num_genes': preprocessing_info['input_dim']
+            }
+        )
 
     model, pred_order = train_model(
         model,
@@ -258,7 +320,11 @@ def main():
         lr=args.lr,
         device=args.device,
         save_dir=save_dir,
+        use_wandb=args.wandb
     )
+    
+    if args.wandb and WANDB_AVAILABLE:
+        wandb.finish()
 
     evaluate_order_plot(
         pred_order, 

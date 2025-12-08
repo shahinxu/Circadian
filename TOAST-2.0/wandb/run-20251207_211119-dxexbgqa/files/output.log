@@ -1,0 +1,4 @@
+Epoch 1/200, Cosine Loss: 0.6065, MSE: 0.1213, Phase Std: 0.0714, Circ Var: 0.0025
+Epoch 51/200, Cosine Loss: 0.5002, MSE: 0.1000, Phase Std: 2.4560, Circ Var: 0.0060
+Epoch 101/200, Cosine Loss: 0.4013, MSE: 0.0803, Phase Std: 2.5561, Circ Var: 0.1401
+Epoch 151/200, Cosine Loss: 0.3100, MSE: 0.0620, Phase Std: 1.4560, Circ Var: 0.2003

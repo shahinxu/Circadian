@@ -1,0 +1,18 @@
+{"time":"2025-12-07T21:52:38.50365882-05:00","level":"INFO","msg":"using version","core version":"0.19.1"}
+{"time":"2025-12-07T21:52:38.50370835-05:00","level":"INFO","msg":"created symlink","path":"/home/rzh/zhenx/Circadian/TOAST_2/wandb/run-20251207_215238-jpxb9c2u/logs/debug-core.log"}
+{"time":"2025-12-07T21:52:38.625951594-05:00","level":"INFO","msg":"created new stream","id":"jpxb9c2u"}
+{"time":"2025-12-07T21:52:38.626065053-05:00","level":"INFO","msg":"stream: started","id":"jpxb9c2u"}
+{"time":"2025-12-07T21:52:38.626188603-05:00","level":"INFO","msg":"sender: started","stream_id":"jpxb9c2u"}
+{"time":"2025-12-07T21:52:38.626186413-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"jpxb9c2u"}
+{"time":"2025-12-07T21:52:38.626304103-05:00","level":"INFO","msg":"handler: started","stream_id":"jpxb9c2u"}
+{"time":"2025-12-07T21:52:38.986710714-05:00","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-12-07T21:56:21.013461875-05:00","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-12-07T21:56:21.014660483-05:00","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-12-07T21:56:21.544499482-05:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-12-07T21:56:21.731818375-05:00","level":"INFO","msg":"handler: operation stats","stats":{}}
+{"time":"2025-12-07T21:56:22.752475182-05:00","level":"INFO","msg":"stream: closing","id":"jpxb9c2u"}
+{"time":"2025-12-07T21:56:22.752532872-05:00","level":"INFO","msg":"handler: closed","stream_id":"jpxb9c2u"}
+{"time":"2025-12-07T21:56:22.752560722-05:00","level":"INFO","msg":"writer: Close: closed","stream_id":"jpxb9c2u"}
+{"time":"2025-12-07T21:56:22.752613752-05:00","level":"WARN","msg":"sender: received Exit record more than once, ignoring"}
+{"time":"2025-12-07T21:56:22.752666342-05:00","level":"INFO","msg":"sender: closed","stream_id":"jpxb9c2u"}
+{"time":"2025-12-07T21:56:22.752737362-05:00","level":"INFO","msg":"stream: closed","id":"jpxb9c2u"}
