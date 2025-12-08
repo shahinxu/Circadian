@@ -14,9 +14,6 @@ const mouse_gene_symbol = ["Arntl", "Clock", "Npas2", "Nr1d1", "Bhlhe41", "Nr1d2
 const human_homologue_gene_symbol = mouse_gene_symbol
 const subfolders = ["Plots", "Fits", "Models", "Parameters"]
 
-#############
-# Variables #
-#############
 function DefaultDict()
 	theDefaultDictionary = Dict(:regex_cont => r".*_C",			# What is the regex match for continuous covariates in the data file
 	:regex_disc => r".*_D",							# What is the regex match for discontinuous covariates in the data file

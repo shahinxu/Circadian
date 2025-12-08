@@ -11,66 +11,50 @@ from pathlib import Path
 import sys
 
 def circular_mean(phases):
-    """Calculate circular mean of phases (in radians)"""
     if len(phases) == 0:
         return np.nan
     sin_sum = np.sum(np.sin(phases))
     cos_sum = np.sum(np.cos(phases))
     mean_phase = np.arctan2(sin_sum, cos_sum)
-    # Convert to 0-2π range
     if mean_phase < 0:
         mean_phase += 2 * np.pi
     return mean_phase
 
 def circular_std(phases):
-    """Calculate circular standard deviation"""
     if len(phases) == 0:
         return np.nan
     sin_sum = np.sum(np.sin(phases))
     cos_sum = np.sum(np.cos(phases))
     R = np.sqrt(sin_sum**2 + cos_sum**2) / len(phases)
-    # R ranges from 0 (uniform) to 1 (concentrated)
-    # Circular std: sqrt(-2*ln(R))
     if R < 1e-10:
-        return np.pi  # Maximum dispersion
+        return np.pi
     return np.sqrt(-2 * np.log(R))
 
 def circular_distance(phase1, phase2):
-    """Calculate shortest circular distance between two phases"""
     diff = np.abs(phase1 - phase2)
     return np.minimum(diff, 2*np.pi - diff)
 
 def calculate_dip_with_outlier_removal(donor_data, outlier_threshold=np.pi/2):
-    """
-    Calculate DIP with iterative outlier removal
-    outlier_threshold: distance threshold in radians (default π/2 = 3 hours)
-    """
     phases = donor_data['Phase'].values
     celltypes = donor_data['CellType'].values
     
     if len(phases) == 0:
         return np.nan, [], []
     
-    # Initial DIP
     current_dip = circular_mean(phases)
     included_mask = np.ones(len(phases), dtype=bool)
     
-    # Iteratively remove outliers
     max_iterations = 5
     for iteration in range(max_iterations):
-        # Calculate distance of each TIP to current DIP
         distances = np.array([circular_distance(p, current_dip) for p in phases])
         
-        # Find outliers
         outliers = (distances > outlier_threshold) & included_mask
         
         if not np.any(outliers):
-            break  # No more outliers
+            break
         
-        # Remove outliers
         included_mask = included_mask & ~outliers
         
-        # Recalculate DIP
         if np.sum(included_mask) > 0:
             current_dip = circular_mean(phases[included_mask])
         else:
@@ -82,37 +66,33 @@ def calculate_dip_with_outlier_removal(donor_data, outlier_threshold=np.pi/2):
     return current_dip, included_celltypes, excluded_celltypes
 
 def load_and_process_data(result_dir):
-    """Load CYCLOPS results and calculate DIP"""
     result_path = Path(result_dir)
     
-    # Load predicted phases
     phase_file = list(result_path.glob("Fit_Output_*.csv"))[0]
     df = pd.read_csv(phase_file)
     df = df.rename(columns={'ID': 'Sample'})
-    df['Phase'] = pd.to_numeric(df['Phase'], errors='coerce')
+    if 'Phases_MA' in df.columns:
+        df['Phase'] = pd.to_numeric(df['Phases_MA'], errors='coerce')
+        print("Using Phases_MA (Mouse Atlas aligned)")
+    else:
+        df['Phase'] = pd.to_numeric(df['Phase'], errors='coerce')
+        print("Warning: Phases_MA not found, using Phase instead")
     
-    # Remove rows with NaN phases
     df = df[df['Phase'].notna()].copy()
-    
-    # Extract Donor ID and CellType from Sample ID
-    # Format: P002_Pre.Bcell -> Donor: P002, Treatment: Pre, CellType: Bcell
     df['Donor'] = df['Sample'].str.extract(r'^(P\d+)_')[0]
     df['Treatment'] = df['Sample'].str.extract(r'_(Pre|Post)\.')[0]
     df['CellType'] = df['Sample'].str.extract(r'\.(.*?)$')[0]
     
-    # Remove rows where extraction failed
     df = df.dropna(subset=['Donor', 'Treatment', 'CellType'])
     
     return df
 
 def calculate_all_dips(df, remove_outliers=True, outlier_threshold=np.pi/2):
-    """Calculate DIP for all donors"""
     results = []
     
     for donor in sorted(df['Donor'].unique()):
         donor_data = df[df['Donor'] == donor].copy()
         
-        # Calculate overall DIP (across all treatments and cell types)
         if remove_outliers:
             dip, included, excluded = calculate_dip_with_outlier_removal(
                 donor_data, outlier_threshold
@@ -138,7 +118,6 @@ def calculate_all_dips(df, remove_outliers=True, outlier_threshold=np.pi/2):
             'Excluded_celltypes': ','.join(excluded) if excluded else ''
         })
         
-        # Also calculate DIP per treatment (Pre/Post)
         for treatment in sorted(donor_data['Treatment'].unique()):
             treat_data = donor_data[donor_data['Treatment'] == treatment]
             
@@ -167,18 +146,13 @@ def calculate_all_dips(df, remove_outliers=True, outlier_threshold=np.pi/2):
     return pd.DataFrame(results)
 
 def plot_dip_results(df, dip_df, output_dir):
-    """Visualize TIP vs DIP"""
-    
-    # Plot 1: Donor-level comparison
     donors = [d for d in dip_df['Donor'].values if '_' not in d]
     
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
     
-    # Left: DIP distribution
     ax = axes[0]
     dip_values = dip_df[dip_df['Donor'].isin(donors)]['DIP'].values
     
-    # Convert to hours for better readability
     dip_hours = dip_values * 24 / (2 * np.pi)
     
     ax.hist(dip_hours, bins=20, alpha=0.7, color='steelblue', edgecolor='black')
@@ -189,19 +163,16 @@ def plot_dip_results(df, dip_df, output_dir):
     ax.set_xlim([0, 24])
     ax.grid(True, alpha=0.3)
     
-    # Right: TIP vs DIP scatter
     ax = axes[1]
     
-    for donor in donors[:10]:  # Show first 10 donors to avoid clutter
+    for donor in donors[:10]:
         donor_data = df[df['Donor'] == donor]
         dip = dip_df[dip_df['Donor'] == donor]['DIP'].values[0]
         
         tips = donor_data['Phase'].values * 24 / (2 * np.pi)
         dip_h = dip * 24 / (2 * np.pi)
         
-        # Plot TIPs
         ax.scatter([donor] * len(tips), tips, alpha=0.5, s=50)
-        # Plot DIP
         ax.scatter([donor], [dip_h], color='red', marker='*', s=200, 
                   edgecolors='black', linewidths=1.5, zorder=10)
     
@@ -218,21 +189,17 @@ def plot_dip_results(df, dip_df, output_dir):
     print(f"Saved: {output_file}")
     plt.close()
     
-    # Plot 2: Circular plot of DIPs
     fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='polar')
     
     dip_df_donors = dip_df[dip_df['Donor'].isin(donors)]
     
-    # Plot each DIP
     for _, row in dip_df_donors.iterrows():
         dip = row['DIP']
         std = row['DIP_std']
         
-        # Plot point
         ax.scatter(dip, 1, s=100, alpha=0.6, edgecolors='black', linewidths=1)
         
-        # Plot uncertainty arc
         if not np.isnan(std):
             arc = np.linspace(dip - std, dip + std, 20)
             ax.plot(arc, [1]*len(arc), linewidth=3, alpha=0.3)
@@ -241,7 +208,6 @@ def plot_dip_results(df, dip_df, output_dir):
     ax.set_theta_zero_location('N')
     ax.set_theta_direction(-1)
     
-    # Set labels in hours
     hour_labels = [f'{int(h)}h' for h in np.linspace(0, 24, 13)[:-1]]
     ax.set_xticklabels(hour_labels)
     ax.set_yticks([])
@@ -259,7 +225,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         result_dir = sys.argv[1]
     else:
-        result_dir = "/home/rzh/zhenx/Circadian/CYCLOPS-2.0/results/Zhang_CancerCell_2025_all_20251208_170431"
+        result_dir = "/home/rzh/zhenx/Circadian/CYCLOPS-2.0/results/Zhang_CancerCell_2025_major"
     
     print(f"Loading data from: {result_dir}")
     df = load_and_process_data(result_dir)
@@ -269,18 +235,15 @@ if __name__ == "__main__":
     print(f"Cell types: {df['CellType'].nunique()}")
     print(f"Treatments: {df['Treatment'].nunique()}")
     
-    # Calculate DIP with outlier removal
     print("\n" + "="*60)
     print("Calculating DIP with outlier removal (threshold = π/2 ≈ 3 hours)...")
     print("="*60)
     dip_df = calculate_all_dips(df, remove_outliers=True, outlier_threshold=np.pi/2)
     
-    # Save results
     output_file = Path(result_dir) / 'DIP_results.csv'
     dip_df.to_csv(output_file, index=False)
     print(f"\nSaved DIP results to: {output_file}")
     
-    # Show summary
     print("\n" + "="*60)
     print("DIP Summary (Donor level):")
     print("="*60)
@@ -299,7 +262,6 @@ if __name__ == "__main__":
             if row['Excluded_celltypes']:
                 print(f"{row['Donor']}: {row['Excluded_celltypes']}")
     
-    # Plot results
     print("\n" + "="*60)
     print("Generating plots...")
     print("="*60)

@@ -1,7 +1,7 @@
 python train.py \
---dataset_path "GSE206583_1_10" \
+--dataset_path "GSE54651/adrenal_gland" \
 --n_components 5 \
---num_epochs 2000 \
+--num_epochs 1000 \
 --lr 0.001 \
 --device cuda
 

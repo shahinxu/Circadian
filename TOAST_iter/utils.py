@@ -190,7 +190,7 @@ def align_predictions_to_gene_acrophases(
         if len(available_cols) == 0:
             gene_est_phases.append(float('nan'))
             gene_amps.append(0.0)
-            gene_names_found.append(g)
+            gene_names_found.append(g_upper)
             continue
         # If multiple rows (probes), average across rows
         expr_values = rows[available_cols].astype(float).mean(axis=0).reindex(sample_order).values
@@ -412,6 +412,3 @@ def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
     print(f"plot saved in: {out_path}")
 
     return out_path, r, r2, spearman_R
-
-
-# rank_loss and its helper were removed per new training logic (align loss no longer used)
