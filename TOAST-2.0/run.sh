@@ -2,10 +2,10 @@
 # Pathway-based TOAST training script
 # wandb is enabled by default, use --no_wandb to disable
 
-# Single dataset example (commented out)
+# Single dataset example
 python train.py \
   --dataset_path "GSE54651_all_tissues" \
-  --num_epochs 20 \
+  --num_epochs 500 \
   --lr 5e-4 \
   --device cuda
 

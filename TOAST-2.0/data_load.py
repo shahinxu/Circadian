@@ -8,9 +8,10 @@ import gc
 
 
 class ExpressionDataset(Dataset):
-    def __init__(self, expressions, covariates=None):
+    def __init__(self, expressions, covariates=None, tissue_indices=None):
         self.expressions = torch.FloatTensor(expressions)
         self.covariates = torch.FloatTensor(covariates) if covariates is not None else None
+        self.tissue_indices = torch.LongTensor(tissue_indices) if tissue_indices is not None else None
 
     def __len__(self):
         return len(self.expressions)
@@ -19,6 +20,8 @@ class ExpressionDataset(Dataset):
         item = {'expression': self.expressions[idx]}
         if self.covariates is not None:
             item['covariates'] = self.covariates[idx]
+        if self.tissue_indices is not None:
+            item['tissue_idx'] = self.tissue_indices[idx]
         return item
 
 
@@ -37,6 +40,7 @@ def blunt_percentile(data, percent=0.975):
 
 def load_and_preprocess_train_data(
         train_file,
+        metadata_file=None,
         blunt_percent=0.975,
         pathway_csv=None
     ):
@@ -76,7 +80,29 @@ def load_and_preprocess_train_data(
 
     print(f"Scaled expression data shape: {expression_scaled.shape}")
 
-    train_dataset = ExpressionDataset(expression_scaled, covariates=None)
+    # Load tissue information from metadata if provided
+    tissue_indices = None
+    tissue_to_idx = None
+    if metadata_file and os.path.exists(metadata_file):
+        print(f"Loading tissue information from {metadata_file}")
+        meta_df = pd.read_csv(metadata_file, low_memory=False)
+        if 'Sample' in meta_df.columns and 'Tissue' in meta_df.columns:
+            # Create tissue to index mapping
+            unique_tissues = sorted(meta_df['Tissue'].unique())
+            tissue_to_idx = {tissue: idx for idx, tissue in enumerate(unique_tissues)}
+            print(f"Found {len(tissue_to_idx)} unique tissues: {list(tissue_to_idx.keys())}")
+            
+            # Map sample columns to tissue indices
+            sample_to_tissue = dict(zip(meta_df['Sample'].astype(str), meta_df['Tissue'].astype(str)))
+            tissue_indices = [tissue_to_idx.get(sample_to_tissue.get(col, ''), 0) for col in sample_columns]
+            tissue_indices = np.array(tissue_indices)
+            print(f"Tissue indices shape: {tissue_indices.shape}")
+        else:
+            print("Warning: metadata file missing 'Sample' or 'Tissue' columns")
+    else:
+        print("No metadata file provided, all samples will use tissue_idx=0")
+
+    train_dataset = ExpressionDataset(expression_scaled, covariates=None, tissue_indices=tissue_indices)
 
     # Load pathway information if provided
     pathway_info = None
@@ -110,7 +136,9 @@ def load_and_preprocess_train_data(
         'final_gene_symbols': final_gene_symbols,
         'blunt_percent': blunt_percent,
         'input_dim': expression_scaled.shape[1],
-        'pathway_info': pathway_info
+        'pathway_info': pathway_info,
+        'tissue_to_idx': tissue_to_idx,
+        'num_tissues': len(tissue_to_idx) if tissue_to_idx else 1
     }
     return train_dataset, preprocessing_info
 

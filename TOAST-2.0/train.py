@@ -43,7 +43,14 @@ def train_model(
     X_input = X_all.unsqueeze(0)
     
     batch_size, n_samples = 1, X_all.shape[0]
-    tissue_idx = torch.zeros(batch_size, n_samples, dtype=torch.long).to(device)
+    # Get tissue indices from dataset
+    if 'tissue_idx' in train_dataset[0]:
+        all_tissue_indices = [train_dataset[i]['tissue_idx'] for i in range(len(train_dataset))]
+        tissue_idx = torch.stack(all_tissue_indices).unsqueeze(0).to(device)
+        print(f"Using tissue indices: unique values = {torch.unique(tissue_idx).cpu().numpy()}")
+    else:
+        tissue_idx = torch.zeros(batch_size, n_samples, dtype=torch.long).to(device)
+        print("Warning: No tissue indices found in dataset, using all zeros")
 
     model.train()
     
@@ -202,6 +209,7 @@ def main():
 
     train_dataset, preprocessing_info = load_and_preprocess_train_data(
         train_file,
+        metadata_file=metadata,
         pathway_csv=args.pathway_csv
     )
 
@@ -219,7 +227,7 @@ def main():
     model = PathwayAutoencoderWithTissue(
         input_dim=preprocessing_info['input_dim'],
         pathway_map=pathway_info['pathway_indices'],
-        num_tissues=1,
+        num_tissues=preprocessing_info.get('num_tissues', 1),
         embed_dim=args.embed_dim,
         dropout=args.dropout
     )
