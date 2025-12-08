@@ -21,7 +21,6 @@ from datetime import datetime
 # Add TOAST directory to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'TOAST'))
 from AE import SetPhaseAutoEncoder
-from compare_with_reference import compare_predictions
 
 
 def load_expression_data(data_path: str, gene_list: List[str] = None):
@@ -351,24 +350,61 @@ def iterative_toast_pipeline(
         pred_df.to_csv(pred_path, index=False)
         print(f"  Predictions saved: {pred_path}")
         
-        # Generate comparison plot using TOAST's compare_with_reference
+        # Generate comparison plot - simple version for single-tissue data
         if true_phases is not None:
             print(f"\n[{iteration}.2] Generating comparison plot...")
             
-            # Prepare metadata for comparison (same format as TOAST's metadata.csv)
-            reference_df = pd.DataFrame({
-                'Sample': sample_names,
-                'Time_Phase': true_phases,
-                'Hour_in_24': (true_phases / (2 * np.pi)) * 24
-            })
-            reference_path = os.path.join(save_dir, f'reference_iter{iteration}.csv')
-            reference_df.to_csv(reference_path, index=False)
-            
-            # Use TOAST's compare_predictions function
-            plot_dir = os.path.join(save_dir, f'comparison_iter{iteration}')
             try:
-                compare_predictions(pred_path, reference_path, plot_dir)
-                print(f"  Comparison plot saved: {plot_dir}/")
+                from scipy.stats import pearsonr, spearmanr
+                
+                # Read predictions
+                pred_df = pd.read_csv(pred_path)
+                
+                # Merge with true phases
+                result_df = pred_df.copy()
+                result_df['true_phase_rad'] = true_phases
+                result_df['true_phase_hours'] = (true_phases / (2 * np.pi)) * 24
+                
+                # Calculate correlations
+                pred_hours = result_df['pred_phase_hours'].values
+                true_hours = result_df['true_phase_hours'].values
+                
+                pearson_r, _ = pearsonr(pred_hours, true_hours)
+                spearman_r, _ = spearmanr(pred_hours, true_hours)
+                
+                # Circular correlation
+                pred_rad = result_df['pred_phase_rad'].values
+                true_rad = result_df['true_phase_rad'].values
+                cos_diff = np.cos(pred_rad - true_rad)
+                circular_r = cos_diff.mean()
+                
+                # Save comparison
+                comp_path = os.path.join(save_dir, f'comparison_iter{iteration}.csv')
+                result_df.to_csv(comp_path, index=False)
+                
+                # Plot
+                fig, ax = plt.subplots(figsize=(10, 8))
+                ax.scatter(true_hours, pred_hours, alpha=0.6, s=80, edgecolors='k', linewidths=0.5)
+                ax.plot([0, 24], [0, 24], 'r--', alpha=0.5, linewidth=2, label='Perfect prediction')
+                
+                ax.set_xlabel('True Phase (hours)', fontsize=14, fontweight='bold')
+                ax.set_ylabel('Predicted Phase (hours)', fontsize=14, fontweight='bold')
+                ax.set_title(f'Iteration {iteration} - {len(current_genes)} genes\n' +
+                           f'Pearson R={pearson_r:.3f}, Spearman ρ={spearman_r:.3f}, Circular R={circular_r:.3f}',
+                           fontsize=16, fontweight='bold')
+                ax.grid(True, alpha=0.3)
+                ax.set_xlim(-1, 25)
+                ax.set_ylim(-1, 25)
+                ax.legend(fontsize=12)
+                
+                plot_path = os.path.join(save_dir, f'comparison_iter{iteration}.png')
+                plt.tight_layout()
+                plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+                plt.close()
+                
+                print(f"  Comparison plot saved: {plot_path}")
+                print(f"  Pearson R={pearson_r:.3f}, Spearman ρ={spearman_r:.3f}, Circular R={circular_r:.3f}")
+                
             except Exception as e:
                 print(f"  Warning: Failed to generate comparison plot: {e}")
         
