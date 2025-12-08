@@ -200,7 +200,7 @@ def align_predictions_to_gene_acrophases(
         if len(available_cols) == 0:
             gene_est_phases.append(float('nan'))
             gene_amps.append(0.0)
-            gene_names_found.append(g)
+            gene_names_found.append(g_upper)
             continue
         # If multiple rows (probes), average across rows
         expr_values = rows[available_cols].astype(float).mean(axis=0).reindex(sample_order).values
@@ -365,64 +365,141 @@ def best_align_phase_for_comparison(
 
 
 def plot_comparsion(results_df: pd.DataFrame, metadata_csv: str, save_dir: str):
-    meta = load_metadata_for_phase_comparison(metadata_csv)
-
+    # Load full metadata with tissue info
+    meta_full = pd.read_csv(metadata_csv, low_memory=False)
+    
     out_dir = os.path.join(save_dir, 'phase_vs_metadata')
     os.makedirs(out_dir, exist_ok=True)
 
     if 'Sample_ID' not in results_df.columns or 'Predicted_Phase_Hours' not in results_df.columns:
         raise ValueError('results_df must contain Sample_ID and Predicted_Phase_Hours columns')
 
+    # Prepare predictions
     preds = results_df[['Sample_ID', 'Predicted_Phase_Hours']].copy()
-    preds = preds.rename(columns={'Sample_ID': 'study_sample', 'Predicted_Phase_Hours': 'pred_phase'})
-    preds['study_sample'] = preds['study_sample'].astype(str)
+    preds = preds.rename(columns={'Sample_ID': 'Sample', 'Predicted_Phase_Hours': 'pred_phase'})
+    preds['Sample'] = preds['Sample'].astype(str)
 
-    meta_view = meta.copy()
-    meta_view['study_sample'] = meta_view['study_sample'].astype(str)
+    # Prepare metadata with tissue info
+    if 'Sample' not in meta_full.columns or 'Time_Hours' not in meta_full.columns:
+        raise ValueError('metadata must contain Sample and Time_Hours columns')
+    
+    meta_view = meta_full[['Sample', 'Time_Hours']].copy()
+    if 'Tissue' in meta_full.columns:
+        meta_view['Tissue'] = meta_full['Tissue'].astype(str)
+    meta_view['Sample'] = meta_view['Sample'].astype(str)
+    meta_view['time_mod24'] = pd.to_numeric(meta_view['Time_Hours'], errors='coerce') % 24
 
-    joined = preds.merge(meta_view, on='study_sample', how='left').dropna(subset=['pred_phase', 'time_mod24'])
+    # Join predictions with metadata
+    joined = preds.merge(meta_view, on='Sample', how='left').dropna(subset=['pred_phase', 'time_mod24'])
     if joined.empty:
         print(f"[WARN] No matches between predictions and metadata")
         return None
 
+    # Summary statistics for all results
+    all_results = []
+    
+    # 1. Generate overall plot for all samples
     phase_hours = np.asarray(joined['pred_phase'], dtype=float)
     metadata_hours = np.asarray(joined['time_mod24'], dtype=float)
-
     phase_rad = time_to_phase(phase_hours, period_hours=24.0)
     metadata_rad = time_to_phase(metadata_hours, period_hours=24.0)
-
-    aligned_rad = best_align_phase_for_comparison(
-        phase_rad, metadata_rad, step=0.1
-    )[0]
-
+    
+    aligned_rad = best_align_phase_for_comparison(phase_rad, metadata_rad, step=0.1)[0]
+    
     r = float(pearsonr(aligned_rad, metadata_rad)[0])
     spearman_R = float(spearmanr(aligned_rad, metadata_rad)[0])
     r2 = r * r if np.isfinite(r) else float('nan')
     circ_r = circular_correlation_jr(phase_rad, metadata_rad)
-    path_parts = [p for p in save_dir.replace('\\', '/').split('/') if p]
-    dataset_name = path_parts[-2] if len(path_parts) >= 2 else path_parts[-1]
-
+    
+    # Plot all samples
     plt.figure(figsize=(8, 7))
     plt.grid(True, linestyle='-')
-    plt.scatter(metadata_rad, aligned_rad, c='r', s=100)
-
+    plt.scatter(metadata_rad, aligned_rad, c='r', s=100, alpha=0.6)
+    
     two_pi = 2 * np.pi
     plt.xlim(0, two_pi)
     plt.ylim(0, two_pi)
     plt.xlabel('Collection Phase', fontsize=24)
     plt.ylabel('Predicted Phase', fontsize=24)
-    plt.title(f"{dataset_name}, JR cor: {circ_r:.2f}", fontsize=24)
-
+    plt.title(f"All Tissues (N={len(phase_rad)}), JR cor: {circ_r:.2f}", fontsize=24)
     plt.tight_layout()
-
-    out_path = os.path.join(out_dir, f'comparsion.png')
-    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    
+    out_path_all = os.path.join(out_dir, 'comparison_all_tissues.png')
+    plt.savefig(out_path_all, dpi=150, bbox_inches='tight')
     plt.close()
-
-    print(f"Pearson R={r:.2f}, Spearman ρ={spearman_R:.2f}, Circular R={circ_r:.2f}")
-    print(f"plot saved in: {out_path}")
-
-    return out_path, r, r2, spearman_R, circ_r
+    
+    print(f"\n=== All Tissues ===")
+    print(f"  N={len(phase_rad)}, Pearson R={r:.3f}, Spearman ρ={spearman_R:.3f}, Circular R={circ_r:.3f}")
+    print(f"  Plot: {out_path_all}")
+    
+    all_results.append({
+        'Tissue': 'All',
+        'N': len(phase_rad),
+        'Pearson_R': r,
+        'R2': r2,
+        'Spearman_R': spearman_R,
+        'Circular_R': circ_r,
+        'Plot': out_path_all
+    })
+    
+    # 2. Generate per-tissue plots
+    if 'Tissue' in joined.columns:
+        tissues = sorted(joined['Tissue'].unique())
+        print(f"\nGenerating comparison plots for {len(tissues)} tissues...")
+        
+        for tissue in tissues:
+            tissue_data = joined[joined['Tissue'] == tissue]
+            if len(tissue_data) < 3:  # Skip tissues with too few samples
+                continue
+            
+            t_phase_hours = np.asarray(tissue_data['pred_phase'], dtype=float)
+            t_metadata_hours = np.asarray(tissue_data['time_mod24'], dtype=float)
+            t_phase_rad = time_to_phase(t_phase_hours, period_hours=24.0)
+            t_metadata_rad = time_to_phase(t_metadata_hours, period_hours=24.0)
+            
+            t_aligned_rad = best_align_phase_for_comparison(t_phase_rad, t_metadata_rad, step=0.1)[0]
+            
+            t_r = float(pearsonr(t_aligned_rad, t_metadata_rad)[0])
+            t_spearman_R = float(spearmanr(t_aligned_rad, t_metadata_rad)[0])
+            t_r2 = t_r * t_r if np.isfinite(t_r) else float('nan')
+            t_circ_r = circular_correlation_jr(t_phase_rad, t_metadata_rad)
+            
+            # Plot this tissue
+            plt.figure(figsize=(8, 7))
+            plt.grid(True, linestyle='-')
+            plt.scatter(t_metadata_rad, t_aligned_rad, c='b', s=100, alpha=0.7)
+            
+            plt.xlim(0, two_pi)
+            plt.ylim(0, two_pi)
+            plt.xlabel('Collection Phase', fontsize=24)
+            plt.ylabel('Predicted Phase', fontsize=24)
+            plt.title(f"{tissue} (N={len(t_phase_rad)}), JR cor: {t_circ_r:.2f}", fontsize=20)
+            plt.tight_layout()
+            
+            tissue_safe = tissue.replace(' ', '_').replace('/', '_')
+            out_path_tissue = os.path.join(out_dir, f'comparison_{tissue_safe}.png')
+            plt.savefig(out_path_tissue, dpi=150, bbox_inches='tight')
+            plt.close()
+            
+            print(f"  [{tissue}] N={len(t_phase_rad)}, Pearson R={t_r:.3f}, Spearman ρ={t_spearman_R:.3f}, Circular R={t_circ_r:.3f}")
+            
+            all_results.append({
+                'Tissue': tissue,
+                'N': len(t_phase_rad),
+                'Pearson_R': t_r,
+                'R2': t_r2,
+                'Spearman_R': t_spearman_R,
+                'Circular_R': t_circ_r,
+                'Plot': out_path_tissue
+            })
+    
+    # Save summary statistics
+    summary_df = pd.DataFrame(all_results)
+    summary_path = os.path.join(out_dir, 'comparison_statistics.csv')
+    summary_df.to_csv(summary_path, index=False)
+    print(f"\nSummary statistics saved to: {summary_path}")
+    
+    return summary_df
 
 
 # rank_loss and its helper were removed per new training logic (align loss no longer used)

@@ -4,3 +4,5 @@
 __pycache__
 *results
 big_data
+wandb
+*.log

@@ -35,86 +35,6 @@ def blunt_percentile(data, percent=0.975):
     return data
 
 
-def load_and_preprocess_metadata(metadata_file, sample_columns):
-    """
-    加载并处理metadata文件
-    返回: covariates_data (numpy array), continuous_dims (int), categorical_cards (list), 
-          covariate_info (dict with encoders and column names)
-    """
-    if not os.path.exists(metadata_file):
-        print("No metadata.csv found, training without covariates")
-        return None, 0, [], None
-    
-    print(f"Loading metadata from {metadata_file}")
-    metadata_df = pd.read_csv(metadata_file)
-    
-    # 确保Sample列存在并且与expression的sample_columns对齐
-    if 'Sample' not in metadata_df.columns:
-        print("Warning: No 'Sample' column in metadata, skipping covariates")
-        return None, 0, [], None
-    
-    # 按照sample_columns的顺序重排metadata
-    metadata_df = metadata_df.set_index('Sample').reindex(sample_columns).reset_index()
-    
-    # 识别协变量列 (_D或_C后缀，排除Sample和Time_Hours)
-    continuous_cols = [col for col in metadata_df.columns 
-                       if col.endswith('_C') and col not in ['Sample', 'Time_Hours']]
-    discrete_cols = [col for col in metadata_df.columns 
-                     if col.endswith('_D') and col not in ['Sample', 'Time_Hours']]
-    
-    if len(continuous_cols) == 0 and len(discrete_cols) == 0:
-        print("No covariate columns found (looking for _C or _D suffix)")
-        return None, 0, [], None
-    
-    print(f"Found {len(continuous_cols)} continuous and {len(discrete_cols)} discrete covariates")
-    print(f"  Continuous: {continuous_cols}")
-    print(f"  Discrete: {discrete_cols}")
-    
-    # 处理连续变量
-    continuous_data = []
-    if continuous_cols:
-        for col in continuous_cols:
-            vals = pd.to_numeric(metadata_df[col], errors='coerce').fillna(0).values
-            continuous_data.append(vals)
-        continuous_data = np.column_stack(continuous_data)
-    else:
-        continuous_data = np.zeros((len(metadata_df), 0))
-    
-    # 处理离散变量
-    discrete_data = []
-    categorical_cards = []
-    label_encoders = {}
-    
-    for col in discrete_cols:
-        le = LabelEncoder()
-        # 将所有值转为字符串以统一处理
-        vals = metadata_df[col].astype(str).fillna('MISSING')
-        encoded = le.fit_transform(vals)
-        discrete_data.append(encoded)
-        categorical_cards.append(len(le.classes_))
-        label_encoders[col] = le
-        print(f"  {col}: {len(le.classes_)} categories - {le.classes_[:5]}...")
-    
-    if discrete_data:
-        discrete_data = np.column_stack(discrete_data)
-    else:
-        discrete_data = np.zeros((len(metadata_df), 0), dtype=int)
-    
-    # 合并: 先连续后离散
-    covariates_data = np.concatenate([continuous_data, discrete_data], axis=1)
-    
-    covariate_info = {
-        'continuous_cols': continuous_cols,
-        'discrete_cols': discrete_cols,
-        'label_encoders': label_encoders,
-        'continuous_dims': len(continuous_cols),
-        'categorical_cards': categorical_cards
-    }
-    
-    print(f"Covariate data shape: {covariates_data.shape}")
-    return covariates_data, len(continuous_cols), categorical_cards, covariate_info
-
-
 def load_and_preprocess_train_data(
         train_file,
         blunt_percent=0.975,
@@ -156,12 +76,7 @@ def load_and_preprocess_train_data(
 
     print(f"Scaled expression data shape: {expression_scaled.shape}")
 
-    metadata_file = os.path.join(train_dir, 'metadata.csv')
-    covariates_data, continuous_dims, categorical_cards, covariate_info = load_and_preprocess_metadata(
-        metadata_file, sample_columns
-    )
-
-    train_dataset = ExpressionDataset(expression_scaled, covariates_data)
+    train_dataset = ExpressionDataset(expression_scaled, covariates=None)
 
     # Load pathway information if provided
     pathway_info = None
@@ -194,11 +109,7 @@ def load_and_preprocess_train_data(
         'sample_columns': sample_columns,
         'final_gene_symbols': final_gene_symbols,
         'blunt_percent': blunt_percent,
-        'continuous_dims': continuous_dims,
-        'categorical_cards': categorical_cards,
-        'covariate_info': covariate_info,
-        'has_covariates': covariates_data is not None,
-        'input_dim': expression_scaled.shape[1],  # Number of genes
+        'input_dim': expression_scaled.shape[1],
         'pathway_info': pathway_info
     }
     return train_dataset, preprocessing_info
@@ -211,15 +122,14 @@ def load_and_preprocess_test_data(test_file, preprocessing_info):
     available_sample_columns = [col for col in sample_columns if col in df.columns]
     gene_df = df[~df['Gene_Symbol'].isin(['time_C'])].copy()
     final_gene_symbols = preprocessing_info['final_gene_symbols']
+    
     if gene_df['Gene_Symbol'].duplicated().any():
         agg_cols = [c for c in available_sample_columns if c in gene_df.columns]
-        if len(agg_cols) == 0:
-            pass
-        else:
+        if len(agg_cols) > 0:
             try:
                 gene_df[agg_cols] = gene_df[agg_cols].apply(pd.to_numeric, errors='coerce')
             except Exception:
-                print("Warning: failed to coerce test aggregation columns to numeric; proceeding with original types")
+                print("Warning: failed to coerce test aggregation columns to numeric")
             grouped = gene_df.groupby('Gene_Symbol', as_index=False)[agg_cols].mean()
             gene_df = grouped
 
@@ -233,63 +143,11 @@ def load_and_preprocess_test_data(test_file, preprocessing_info):
 
     scaler = preprocessing_info['scaler']
     test_expression_scaled = scaler.transform(test_expression_data)
-
     print(f"Test data scaled shape: {test_expression_scaled.shape}")
 
-    test_covariates = None
-    if preprocessing_info['has_covariates']:
-        import os
-        test_dir = os.path.dirname(test_file)
-        test_metadata_file = os.path.join(test_dir, 'metadata.csv')
-        
-        if os.path.exists(test_metadata_file):
-            print("Loading test metadata...")
-            test_metadata_df = pd.read_csv(test_metadata_file)
-            
-            if 'Sample' in test_metadata_df.columns:
-                test_metadata_df = test_metadata_df.set_index('Sample').reindex(available_sample_columns).reset_index()
-                
-                covariate_info = preprocessing_info['covariate_info']
-                continuous_cols = covariate_info['continuous_cols']
-                discrete_cols = covariate_info['discrete_cols']
-                label_encoders = covariate_info['label_encoders']
-                
-                continuous_data = []
-                if continuous_cols:
-                    for col in continuous_cols:
-                        vals = pd.to_numeric(test_metadata_df[col], errors='coerce').fillna(0).values
-                        continuous_data.append(vals)
-                    continuous_data = np.column_stack(continuous_data)
-                else:
-                    continuous_data = np.zeros((len(test_metadata_df), 0))
-                
-                # 处理离散变量
-                discrete_data = []
-                for col in discrete_cols:
-                    le = label_encoders[col]
-                    vals = test_metadata_df[col].astype(str).fillna('MISSING')
-                    # 处理未见过的类别
-                    encoded = []
-                    for val in vals:
-                        if val in le.classes_:
-                            encoded.append(le.transform([val])[0])
-                        else:
-                            print(f"Warning: Unknown category '{val}' in {col}, using 0")
-                            encoded.append(0)
-                    discrete_data.append(encoded)
-                
-                if discrete_data:
-                    discrete_data = np.column_stack(discrete_data)
-                else:
-                    discrete_data = np.zeros((len(test_metadata_df), 0), dtype=int)
-                
-                test_covariates = np.concatenate([continuous_data, discrete_data], axis=1)
-                print(f"Test covariate data shape: {test_covariates.shape}")
-
-    test_dataset = ExpressionDataset(test_expression_scaled, test_covariates)
+    test_dataset = ExpressionDataset(test_expression_scaled, covariates=None)
 
     test_preprocessing_info = preprocessing_info.copy()
-    test_preprocessing_info.update({
-        'test_sample_columns': available_sample_columns
-    })
+    test_preprocessing_info['sample_columns'] = available_sample_columns
+
     return test_dataset, test_preprocessing_info

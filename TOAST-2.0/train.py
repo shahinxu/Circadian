@@ -1,4 +1,3 @@
-from utils import plot_comparsion
 import argparse
 import os
 import numpy as np
@@ -20,41 +19,6 @@ try:
 except ImportError:
     WANDB_AVAILABLE = False
     print("[WARN] wandb not installed. Run: pip install wandb")
-
-def greedy_ordering(components: np.ndarray):
-    n = components.shape[0]
-    visited = np.zeros(n, dtype=bool)
-    order = []
-    start = np.argmin(np.sum(np.abs(components), axis=1))
-    cur = start
-    order.append(cur)
-    visited[cur] = True
-    for _ in range(n - 1):
-        diffs = np.abs(components - components[cur:cur+1, :])
-        dists = np.sum(diffs, axis=1)
-        dists[visited] = np.inf
-        nxt = np.argmin(dists)
-        order.append(nxt)
-        visited[nxt] = True
-        cur = nxt
-    return np.array(order, dtype=int)
-
-def plot_express(components, phases, save_path, n_plot=None):
-    order = np.argsort(phases)
-    phases_sorted = phases[order]
-    comp_sorted = components[order]
-    n_components = comp_sorted.shape[1]
-    if n_plot is None:
-        n_plot = n_components
-    plt.figure(figsize=(8, 6))
-    for i in range(n_plot):
-        plt.plot(phases_sorted, comp_sorted[:, i], label=f'PC{i+1}')
-    plt.xlabel('Predicted phase')
-    plt.title('Expression')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=200)
-    plt.close()
 
 
 def train_model(
@@ -134,36 +98,7 @@ def train_model(
             print(f"Epoch {epoch+1}/{num_epochs}, Cosine Loss: {loss_val:.4f}, "
                   f"MSE: {mse:.4f}, Phase Std: {phase_std:.4f}, Circ Var: {circular_variance:.4f}")
 
-    model.eval()
-    with torch.no_grad():
-        _, pred_phases, recon = model(X_input, tissue_idx)
-            
-    pred_phases_np = pred_phases.squeeze(0).detach().cpu().numpy()
-    pred_order_relative = np.argsort(pred_phases_np)
-    
-    return model, pred_order_relative
-
-
-def evaluate_order_plot(
-        pred_order, 
-        preprocessing_info, 
-        metadata_path, 
-        save_dir, 
-        period_hours=24.0
-    ):
-    if not os.path.isfile(metadata_path):
-        return None
-
-    n_samples = len(pred_order)
-    pred_hours = (np.arange(n_samples) / n_samples) * period_hours
-    sample_names = preprocessing_info.get('sample_columns', [])
-    order_df = pd.DataFrame({
-        'Sample_ID': sample_names,
-        'Predicted_Order': pred_order,
-        'Predicted_Phase_Hours': pred_hours
-    })
-    save_greedy = os.path.join(save_dir + '_greedy') if save_dir else save_dir + '_greedy'
-    return plot_comparsion(order_df, metadata_path, save_greedy)
+    return model
 
 
 def evaluate_test_set(
@@ -191,15 +126,10 @@ def evaluate_test_set(
 
     model.eval()
     with torch.no_grad():
-        has_covariates = preprocessing_info.get('has_covariates', False)
-        if has_covariates:
-            all_covariates = [test_dataset[i]['covariates'] for i in range(len(test_dataset))]
-            cov_input = torch.stack(all_covariates).unsqueeze(0).to(device)
-        else:
-            batch_size, n_samples = 1, X_test.shape[0]
-            cov_input = torch.zeros(batch_size, n_samples, 0).to(device)
+        batch_size, n_samples = 1, X_test.shape[0]
+        tissue_idx = torch.zeros(batch_size, n_samples, dtype=torch.long).to(device)
         
-        _, pred_phases, recon = model(X_input, cov_input)
+        _, pred_phases, _ = model(X_input, tissue_idx)
             
     pred_phases_np = pred_phases.squeeze(0).cpu().numpy()
     
@@ -222,9 +152,6 @@ def evaluate_test_set(
     results_path = os.path.join(save_dir, 'predictions.csv')
     results_df.to_csv(results_path, index=False)
     print(f"Test predictions saved to: {results_path}")
-
-    if metadata_path and os.path.isfile(metadata_path):
-        plot_comparsion(results_df, metadata_path, save_dir)
 
     return results_df
 
@@ -299,8 +226,9 @@ def main():
     print(f"Initialized: {len(pathway_info['pathway_names'])} pathways, {args.embed_dim}D embeddings")
 
     if args.wandb and WANDB_AVAILABLE:
-        wandb.init(
+        run = wandb.init(
             project=args.wandb_project,
+            name=f"{args.dataset_path.replace('/', '_')}",
             config={
                 'dataset': args.dataset_path,
                 'num_epochs': args.num_epochs,
@@ -311,8 +239,11 @@ def main():
                 'num_genes': preprocessing_info['input_dim']
             }
         )
+        print("\n" + "="*70)
+        print(f"📊 W&B Dashboard: {run.get_url()}")
+        print("="*70 + "\n")
 
-    model, pred_order = train_model(
+    model = train_model(
         model,
         train_dataset=train_dataset,
         preprocessing_info=preprocessing_info,
@@ -323,16 +254,22 @@ def main():
         use_wandb=args.wandb
     )
     
+    # Save model checkpoint
+    model_path = os.path.join(save_dir, 'model.pt')
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'preprocessing_info': preprocessing_info,
+        'config': {
+            'embed_dim': args.embed_dim,
+            'dropout': args.dropout,
+            'num_pathways': len(pathway_info['pathway_names']),
+            'num_genes': preprocessing_info['input_dim']
+        }
+    }, model_path)
+    print(f"Model saved to: {model_path}")
+    
     if args.wandb and WANDB_AVAILABLE:
         wandb.finish()
-
-    evaluate_order_plot(
-        pred_order, 
-        preprocessing_info, 
-        metadata, 
-        save_dir, 
-        period_hours=args.period_hours
-    )
 
     print("Generating final predictions and comparison plot in main save_dir...")
     results_df = None
@@ -347,6 +284,23 @@ def main():
         )
     except Exception as e:
         print(f"[WARN] Failed to generate final prediction plot: {e}")
+    
+    # Generate comparison plot with metadata
+    predictions_csv = os.path.join(save_dir, 'predictions.csv')
+    if os.path.exists(predictions_csv) and os.path.exists(metadata):
+        print("\nGenerating phase comparison plots...")
+        try:
+            from utils import plot_comparsion
+            import pandas as pd
+            results_df = pd.read_csv(predictions_csv)
+            summary_df = plot_comparsion(results_df, metadata, save_dir)
+            if summary_df is not None:
+                print("\n=== Comparison Summary ===")
+                print(summary_df[['Tissue', 'N', 'Pearson_R', 'Spearman_R', 'Circular_R']].to_string(index=False))
+        except Exception as e:
+            print(f"[WARN] Failed to generate comparison plots: {e}")
+            import traceback
+            traceback.print_exc()
 
     if not os.path.isfile(metadata):
         try:
