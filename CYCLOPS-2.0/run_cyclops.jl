@@ -5,7 +5,16 @@ data_path = "DATA_PATH_PLACEHOLDER"
 output_path = "OUTPUT_PATH_PLACEHOLDER"
 path_to_cyclops = "./CYCLOPS.jl"
 
-expression_data = CSV.read(joinpath(data_path, "expression.csv"), DataFrame)
+expression_data_raw = CSV.read(joinpath(data_path, "expression.csv"), DataFrame)
+
+for col in names(expression_data_raw)[2:end]
+    try
+        expression_data_raw[!, col] = parse.(Float64, string.(expression_data_raw[!, col]))
+    catch
+    end
+end
+
+expression_data = expression_data_raw
 seed_genes = readlines(joinpath(data_path, "seed_genes.txt"))
 
 sample_ids_with_collection_times = []

@@ -5,15 +5,14 @@
 DATASET_PATH="GSE54651/adrenal_gland"
 SEED_GENES="../data/${DATASET_PATH}/seed_genes.txt"
 
-# Default parameters
-N_ITERATIONS=5
-GENES_PER_ITER=100
+N_ITERATIONS=10
+GENES_PER_ITER=20
 EPOCHS=1000
 N_COMPONENTS=5
-LR=0.001
+LR=1e-3
 DROPOUT=0.1
 DEVICE="cuda"
-RHYTHMICITY_METHOD="correlation"  # or "anova"
+RHYTHMICITY_METHOD="correlation"
 
 # Run iterative training
 python train_iterative.py \
