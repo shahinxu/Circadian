@@ -2,7 +2,7 @@
 
 # Example run script for iterative TOAST training
 
-DATASET_PATH="GSE54651/adrenal_gland"
+DATASET_PATH="GSE54652/adrenal_gland"
 SEED_GENES="../data/${DATASET_PATH}/seed_genes.txt"
 
 N_ITERATIONS=10

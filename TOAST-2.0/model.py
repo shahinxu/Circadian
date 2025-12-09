@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+"""
+Model architectures for TOAST-2.0
+Includes pathway-aware attention models
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -5,6 +11,7 @@ from typing import List
 
 
 class PathwayTokenizer(nn.Module):
+    """Convert gene expression to pathway-level tokens"""
     def __init__(self, pathway_indices: List[List[int]], embed_dim: int = 128):
         super().__init__()
         self.indices = pathway_indices
@@ -18,6 +25,7 @@ class PathwayTokenizer(nn.Module):
 
 
 class PathwayAttentionEncoder(nn.Module):
+    """Encoder with pathway-aware attention and tissue embedding"""
     def __init__(
         self, 
         pathway_map: List[List[int]],
@@ -30,17 +38,18 @@ class PathwayAttentionEncoder(nn.Module):
         self.tokenizer = PathwayTokenizer(pathway_map, embed_dim)
         self.tissue_embed = nn.Embedding(num_tissues, embed_dim)
         
-        # Learnable query combining tissue and global expression pattern
+        # Query combining tissue and global expression pattern
         self.query_proj = nn.Sequential(
             nn.Linear(embed_dim * 2, embed_dim),
             nn.ReLU(),
             nn.Dropout(dropout)
         )
         
-        # Sample-level self-attention within tissue (after pathway-tissue cross-attention)
+        # Sample-level self-attention within tissue
         self.sample_attn = nn.MultiheadAttention(embed_dim, num_heads=4, dropout=dropout, batch_first=True)
         self.norm_sample = nn.LayerNorm(embed_dim)
         
+        # Project to 2D latent space (phase coordinates)
         self.to_latent = nn.Sequential(
             nn.Linear(embed_dim, 32),
             nn.ReLU(),
@@ -49,14 +58,21 @@ class PathwayAttentionEncoder(nn.Module):
         )
     
     def forward(self, x_genes, x_tissue):
+        # Convert genes to pathway tokens
         pathway_tokens = F.relu(self.tokenizer(x_genes))
         tissue_emb = self.tissue_embed(x_tissue)
         pathway_mean = pathway_tokens.mean(dim=1)
+        
+        # Create query from tissue + global expression
         combined = torch.cat([tissue_emb, pathway_mean], dim=-1)
         query = self.query_proj(combined).unsqueeze(1)
+        
+        # Cross-attention: query pathways based on tissue
         scores = torch.bmm(query, pathway_tokens.transpose(1, 2)) / (pathway_tokens.size(-1) ** 0.5)
         attn_weights = F.softmax(scores, dim=-1)
         context = torch.bmm(attn_weights, pathway_tokens).squeeze(1)
+        
+        # Self-attention within tissue groups
         unique_tissues = torch.unique(x_tissue, sorted=True)
         context_list = []
         
@@ -73,6 +89,7 @@ class PathwayAttentionEncoder(nn.Module):
             
             context_list.append(tissue_contexts)
         
+        # Reconstruct full context tensor
         context_new = torch.zeros_like(context)
         idx = 0
         for tissue_id in unique_tissues:
@@ -81,6 +98,7 @@ class PathwayAttentionEncoder(nn.Module):
             idx += 1
         context = context_new
         
+        # Project to 2D phase space
         latent = self.to_latent(context)
         latent_norm = F.normalize(latent, p=2, dim=1)
         
@@ -88,42 +106,7 @@ class PathwayAttentionEncoder(nn.Module):
 
 
 class PathwayAutoencoder(nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        pathway_map: List[List[int]],
-        num_tissues: int,
-        embed_dim: int = 128,
-        dropout: float = 0.1
-    ):
-        super().__init__()
-        
-        self.encoder = PathwayAttentionEncoder(
-            pathway_map=pathway_map,
-            num_tissues=num_tissues,
-            embed_dim=embed_dim,
-            dropout=dropout
-        )
-        
-        self.decoder = nn.Linear(2, input_dim)
-    
-    def encode(self, x_genes, x_tissue):
-        phase_coords = self.encoder(x_genes, x_tissue)
-        phase_angles = torch.atan2(phase_coords[:, 1], phase_coords[:, 0])
-        phase_angles = torch.remainder(phase_angles + 2 * torch.pi, 2 * torch.pi)
-        return phase_coords, phase_angles
-
-    def decode(self, phase_coords):
-        return self.decoder(phase_coords)
-    
-    def forward(self, x_genes, x_tissue):
-        phase_coords, phase_angles = self.encode(x_genes, x_tissue)
-        reconstructed = self.decode(phase_coords)
-        reconstructed = F.normalize(reconstructed, p=2, dim=1)
-        return phase_coords, phase_angles, reconstructed
-
-
-class PathwayAutoencoderWithTissue(nn.Module):
+    """Pathway-aware autoencoder for circadian phase prediction"""
     def __init__(
         self,
         input_dim: int,
@@ -133,6 +116,7 @@ class PathwayAutoencoderWithTissue(nn.Module):
         dropout: float = 0.1
     ):
         super().__init__()
+        
         self.encoder = PathwayAttentionEncoder(
             pathway_map=pathway_map,
             num_tissues=num_tissues,
@@ -143,6 +127,7 @@ class PathwayAutoencoderWithTissue(nn.Module):
         self.decoder = nn.Linear(2, input_dim)
     
     def encode_single(self, x_gene_sample, tissue_idx_scalar):
+        """Encode single sample"""
         phase_coords_norm = self.encoder(x_gene_sample.unsqueeze(0), tissue_idx_scalar.unsqueeze(0))
         
         phase_angle = torch.atan2(phase_coords_norm[:, 1], phase_coords_norm[:, 0])
@@ -151,6 +136,7 @@ class PathwayAutoencoderWithTissue(nn.Module):
         return phase_coords_norm.squeeze(0), phase_angle.squeeze(0)
     
     def encode_batch(self, x_genes, tissue_idx):
+        """Encode batch of samples"""
         phase_coords_norm = self.encoder(x_genes, tissue_idx)
         
         phase_angles = torch.atan2(phase_coords_norm[:, 1], phase_coords_norm[:, 0])
@@ -159,10 +145,12 @@ class PathwayAutoencoderWithTissue(nn.Module):
         return phase_coords_norm, phase_angles
     
     def decode(self, phase_coords):
+        """Decode phase coordinates to gene expression"""
         return self.decoder(phase_coords)
     
     def forward(self, x_genes, tissue_idx):
         if x_genes.dim() == 3:
+            # Batch processing
             batch_size, n_samples, n_genes = x_genes.shape
             x_genes_flat = x_genes.view(-1, n_genes)
             tissue_idx_flat = tissue_idx.view(-1) if tissue_idx.dim() == 2 else tissue_idx
@@ -177,6 +165,7 @@ class PathwayAutoencoderWithTissue(nn.Module):
             
             return phase_coords, phase_angles, reconstructed
         else:
+            # Single sample
             phase_coords, phase_angles = self.encode_single(x_genes, tissue_idx)
             reconstructed = self.decode(phase_coords.unsqueeze(0))
             reconstructed = F.normalize(reconstructed, p=2, dim=1)

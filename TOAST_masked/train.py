@@ -1,3 +1,4 @@
+from utils import plot_comparsion
 import argparse
 import os
 import numpy as np
@@ -8,17 +9,33 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import argparse
 import os
-from model import PathwayAutoencoder
-from loader import load_and_preprocess_train_data, load_and_preprocess_test_data
+from set_transformer import SetPhaseAutoEncoder
+from data_load import load_and_preprocess_train_data, load_and_preprocess_test_data
+from torch.utils.data import DataLoader
+from utils import predict_and_save_phases
 from utils import align_predictions_to_gene_acrophases
 from datetime import datetime
 import torch.nn.functional as F
-try:
-    import wandb
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
-    print("[WARN] wandb not installed. Run: pip install wandb")
+
+def plot_express(expression_data, phases, save_path, n_plot=5):
+    """Plot expression profiles of top genes ordered by phase"""
+    order = np.argsort(phases)
+    phases_sorted = phases[order]
+    expr_sorted = expression_data[order]
+    n_genes = expr_sorted.shape[1]
+    
+    # Plot only a subset of genes for visualization
+    n_plot = min(n_plot, n_genes)
+    plt.figure(figsize=(8, 6))
+    for i in range(n_plot):
+        plt.plot(phases_sorted, expr_sorted[:, i], label=f'Gene{i+1}', alpha=0.7)
+    plt.xlabel('Predicted phase')
+    plt.ylabel('Expression (scaled)')
+    plt.title('Gene Expression Profiles')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=200)
+    plt.close()
 
 
 def train_model(
@@ -28,84 +45,88 @@ def train_model(
     num_epochs=100, 
     lr=1e-3, 
     device='cuda',
-    save_dir='./model_checkpoints',
-    use_wandb=False
+    save_dir='./model_checkpoints'
 ):
+    """Train model with reconstruction loss only"""
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=100)
     
     os.makedirs(save_dir, exist_ok=True)
     train_losses = []
+    
+    # Prepare data: all samples as one set
     all_expressions = [train_dataset[i]['expression'] for i in range(len(train_dataset))]
     X_all = torch.stack(all_expressions).to(device)
     X_all = X_all / (torch.norm(X_all, dim=1, keepdim=True) + 1e-8)
-    X_input = X_all.unsqueeze(0)
-    
-    batch_size, n_samples = 1, X_all.shape[0]
-    # Get tissue indices from dataset
-    if 'tissue_idx' in train_dataset[0]:
-        all_tissue_indices = [train_dataset[i]['tissue_idx'] for i in range(len(train_dataset))]
-        tissue_idx = torch.stack(all_tissue_indices).unsqueeze(0).to(device)
-        print(f"Using tissue indices: unique values = {torch.unique(tissue_idx).cpu().numpy()}")
-    else:
-        tissue_idx = torch.zeros(batch_size, n_samples, dtype=torch.long).to(device)
-        print("Warning: No tissue indices found in dataset, using all zeros")
+    X_input = X_all.unsqueeze(0)  # [1, n_samples, n_genes]
 
     model.train()
     
     for epoch in range(num_epochs):
         optimizer.zero_grad()
         
-        _, pred_phases, recon = model(X_input, tissue_idx)
-            
-        loss = 1 - F.cosine_similarity(recon, X_input, dim=2).mean()
+        # Forward pass (no need for embeddings)
+        phase_coords, pred_phases, recon = model(X_input, return_embeddings=False)
         
-        loss.backward()
+        # Reconstruction loss (cosine similarity)
+        recon_loss = 1 - F.cosine_similarity(recon, X_input, dim=2).mean()
+        
+        recon_loss.backward()
         optimizer.step()
         
-        loss_val = loss.item()
+        # Logging
+        loss_val = recon_loss.item()
         train_losses.append(loss_val)
+        
         scheduler.step(loss_val)
         
-        # Compute metrics
-        with torch.no_grad():
-            phases_np = pred_phases.squeeze(0).cpu().numpy()
-            phase_std = np.std(phases_np)
-            phase_range = phases_np.max() - phases_np.min()
-            
-            # Circular variance (0=all same, 1=uniform)
-            complex_phases = np.exp(1j * phases_np)
-            circular_mean = np.abs(complex_phases.mean())
-            circular_variance = 1 - circular_mean
-            
-            # Phase coherence (consecutive phase differences)
-            sorted_phases = np.sort(phases_np)
-            phase_diffs = np.diff(sorted_phases)
-            phase_coherence = 1.0 / (1.0 + np.std(phase_diffs))
-            
-            # Reconstruction MSE
-            mse = F.mse_loss(recon, X_input).item()
-            
-        metrics = {
-            'epoch': epoch + 1,
-            'loss/cosine': loss_val,
-            'loss/mse': mse,
-            'phase/std': phase_std,
-            'phase/range': phase_range,
-            'phase/circular_variance': circular_variance,
-            'phase/coherence': phase_coherence,
-            'lr': optimizer.param_groups[0]['lr']
-        }
-        
-        if use_wandb and WANDB_AVAILABLE:
-            wandb.log(metrics)
-        
         if epoch % 50 == 0:
-            print(f"Epoch {epoch+1}/{num_epochs}, Cosine Loss: {loss_val:.4f}, "
-                  f"MSE: {mse:.4f}, Phase Std: {phase_std:.4f}, Circ Var: {circular_variance:.4f}")
+            print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss_val:.4f}")
 
-    return model
+    # Evaluation
+    model.eval()
+    with torch.no_grad():
+        _, pred_phases, _ = model(X_input, return_embeddings=False)
+    
+    pred_phases_np = pred_phases.squeeze(0).detach().cpu().numpy()
+    pred_order_relative = np.argsort(pred_phases_np)
+    
+    # Plot training curve
+    plt.figure(figsize=(8, 5))
+    plt.plot(train_losses)
+    plt.xlabel('Epoch')
+    plt.ylabel('Reconstruction Loss')
+    plt.title('Training Loss')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    loss_plot_path = os.path.join(save_dir, 'training_losses.png')
+    plt.savefig(loss_plot_path, dpi=200)
+    plt.close()
+    print(f"Training curve saved to {loss_plot_path}")
+    
+    return model, pred_order_relative
+
+
+def evaluate_order_plot(
+        pred_order, 
+        preprocessing_info, 
+        metadata_path, 
+        save_dir, 
+        period_hours=24.0
+    ):
+    if not os.path.isfile(metadata_path):
+        return None
+
+    n_samples = len(pred_order)
+    pred_hours = (np.arange(n_samples) / n_samples) * period_hours
+    sample_names = preprocessing_info.get('sample_columns', [])
+    order_df = pd.DataFrame({
+        'Sample_ID': sample_names,
+        'Predicted_Order': pred_order,
+        'Predicted_Phase_Hours': pred_hours
+    })
+    return plot_comparsion(order_df, metadata_path, save_dir)
 
 
 def evaluate_test_set(
@@ -133,11 +154,7 @@ def evaluate_test_set(
 
     model.eval()
     with torch.no_grad():
-        batch_size, n_samples = 1, X_test.shape[0]
-        tissue_idx = torch.zeros(batch_size, n_samples, dtype=torch.long).to(device)
-        
-        _, pred_phases, _ = model(X_input, tissue_idx)
-            
+        _, pred_phases, recon = model(X_input, return_embeddings=False)
     pred_phases_np = pred_phases.squeeze(0).cpu().numpy()
     
     period = preprocessing_info.get('period_hours', 24.0)
@@ -160,12 +177,15 @@ def evaluate_test_set(
     results_df.to_csv(results_path, index=False)
     print(f"Test predictions saved to: {results_path}")
 
+    if metadata_path and os.path.isfile(metadata_path):
+        plot_comparsion(results_df, metadata_path, save_dir)
+
     return results_df
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", required=True)
-    parser.add_argument("--num_epochs", type=int, default=500)
+    parser.add_argument("--num_epochs", type=int, default=200)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--lambda_recon", type=float, default=0.1)
     parser.add_argument("--period_hours", type=float, default=24.0)
@@ -174,16 +194,14 @@ def main():
     parser.add_argument("--align_gene_symbols", type=str, default=None)
     parser.add_argument("--align_acrophases", type=str, default=None)
     parser.add_argument("--random_seed", type=int, default=42)
-    parser.add_argument("--pathway_csv", type=str, default="../pathway_dataset/dataset.csv",
-                        help="Path to pathway dataset CSV")
-    parser.add_argument("--embed_dim", type=int, default=128,
-                        help="Embedding dimension for pathway model")
-    parser.add_argument("--wandb", action='store_true', default=True,
-                        help="Enable Weights & Biases logging")
-    parser.add_argument("--no_wandb", action='store_false', dest='wandb',
-                        help="Disable Weights & Biases logging")
-    parser.add_argument("--wandb_project", type=str, default="circadian-pathway",
-                        help="W&B project name")
+    
+    # Set Transformer parameters
+    parser.add_argument("--d_model", type=int, default=128, help="Hidden dimension")
+    parser.add_argument("--num_heads", type=int, default=4, help="Number of attention heads")
+    parser.add_argument("--num_layers", type=int, default=2, help="Number of SAB/ISAB layers")
+    parser.add_argument("--use_isab", action='store_true', help="Use ISAB for efficiency (O(N) vs O(N^2))")
+    parser.add_argument("--num_inducing_points", type=int, default=32, help="Number of inducing points for ISAB")
+    
     args = parser.parse_args()
 
     base_data = f"../data/{args.dataset_path}"
@@ -195,89 +213,42 @@ def main():
     torch.manual_seed(args.random_seed)
     np.random.seed(args.random_seed)
     if args.device == 'cuda' and not torch.cuda.is_available():
-        print("CUDA not available, falling back to CPU")
         args.device = 'cpu'
-    else:
-        if args.device == 'cuda':
-            print(f"Using device: {args.device}")
-            print(f"GPU: {torch.cuda.get_device_name(0)}")
-            print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
-        else:
-            print(f"Using device: {args.device}")
 
     os.makedirs(save_dir, exist_ok=True)
 
-    train_dataset, preprocessing_info = load_and_preprocess_train_data(
-        train_file,
-        metadata_file=metadata,
-        pathway_csv=args.pathway_csv
-    )
+    train_dataset, preprocessing_info = load_and_preprocess_train_data(train_file)
 
     preprocessing_info['period_hours'] = args.period_hours
 
-    pathway_info = preprocessing_info.get('pathway_info', None)
-    
-    if pathway_info is None:
-        raise ValueError("Pathway information not found! Must use --use_pathway_model with --pathway_csv")
-    
-    print("="*50)
-    print("Pathway-Based Attention Model")
-    print("="*50)
-    
-    model = PathwayAutoencoder(
+    model = SetPhaseAutoEncoder(
         input_dim=preprocessing_info['input_dim'],
-        pathway_map=pathway_info['pathway_indices'],
-        num_tissues=preprocessing_info.get('num_tissues', 1),
-        embed_dim=args.embed_dim,
-        dropout=args.dropout
+        dim_hidden=args.d_model,
+        dropout=args.dropout,
+        use_isab=args.use_isab,
+        num_inds=args.num_inducing_points
     )
-    print(f"Initialized: {len(pathway_info['pathway_names'])} pathways, {args.embed_dim}D embeddings")
+    
+    print(f"\n{'='*60}")
+    print(f"Set Transformer Configuration:")
+    print(f"  Input dimension: {preprocessing_info['input_dim']}")
+    print(f"  Hidden dimension: {args.d_model}")
+    print(f"  Attention heads: 4 (fixed)")
+    print(f"  Encoder layers: 2 (fixed)")
+    print(f"  Architecture: {'ISAB (O(N))' if args.use_isab else 'SAB (O(N^2))'}")
+    if args.use_isab:
+        print(f"  Inducing points: {args.num_inducing_points}")
+    print(f"{'='*60}\n")
 
-    if args.wandb and WANDB_AVAILABLE:
-        run = wandb.init(
-            project=args.wandb_project,
-            name=f"{args.dataset_path.replace('/', '_')}",
-            config={
-                'dataset': args.dataset_path,
-                'num_epochs': args.num_epochs,
-                'lr': args.lr,
-                'embed_dim': args.embed_dim,
-                'dropout': args.dropout,
-                'num_pathways': len(pathway_info['pathway_names']),
-                'num_genes': preprocessing_info['input_dim']
-            }
-        )
-        print("\n" + "="*70)
-        print(f"📊 W&B Dashboard: {run.get_url()}")
-        print("="*70 + "\n")
-
-    model = train_model(
+    model, pred_order = train_model(
         model,
         train_dataset=train_dataset,
         preprocessing_info=preprocessing_info,
         num_epochs=args.num_epochs,
         lr=args.lr,
         device=args.device,
-        save_dir=save_dir,
-        use_wandb=args.wandb
+        save_dir=save_dir
     )
-    
-    # Save model checkpoint
-    model_path = os.path.join(save_dir, 'model.pt')
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'preprocessing_info': preprocessing_info,
-        'config': {
-            'embed_dim': args.embed_dim,
-            'dropout': args.dropout,
-            'num_pathways': len(pathway_info['pathway_names']),
-            'num_genes': preprocessing_info['input_dim']
-        }
-    }, model_path)
-    print(f"Model saved to: {model_path}")
-    
-    if args.wandb and WANDB_AVAILABLE:
-        wandb.finish()
 
     print("Generating final predictions and comparison plot in main save_dir...")
     results_df = None
@@ -292,23 +263,6 @@ def main():
         )
     except Exception as e:
         print(f"[WARN] Failed to generate final prediction plot: {e}")
-    
-    # Generate comparison plot with metadata
-    predictions_csv = os.path.join(save_dir, 'predictions.csv')
-    if os.path.exists(predictions_csv) and os.path.exists(metadata):
-        print("\nGenerating phase comparison plots...")
-        try:
-            from utils import plot_comparsion
-            import pandas as pd
-            results_df = pd.read_csv(predictions_csv)
-            summary_df = plot_comparsion(results_df, metadata, save_dir)
-            if summary_df is not None:
-                print("\n=== Comparison Summary ===")
-                print(summary_df[['Tissue', 'N', 'Pearson_R', 'Spearman_R', 'Circular_R']].to_string(index=False))
-        except Exception as e:
-            print(f"[WARN] Failed to generate comparison plots: {e}")
-            import traceback
-            traceback.print_exc()
 
     if not os.path.isfile(metadata):
         try:
