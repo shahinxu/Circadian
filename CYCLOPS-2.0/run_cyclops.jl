@@ -29,8 +29,8 @@ training_parameters = Dict(
     :regex_cont => r".*_C",
     :regex_disc => r".*_D",
     :blunt_percent => 0.975,
-    :seed_min_CV => 0.14,
-    :seed_max_CV => 0.9,
+    :seed_min_CV => 0.0,
+    :seed_max_CV => 100.0,
     :seed_mth_Gene => 10000,
     :norm_gene_level => true,
     :norm_disc => false,
@@ -87,7 +87,7 @@ training_parameters = Dict(
     :plot_p_cutoff => 0.05
 )
 
-Distributed.addprocs(length(Sys.cpu_info()))
+Distributed.addprocs(16)
 @everywhere begin
     using DataFrames, Statistics, StatsBase, LinearAlgebra, MultivariateStats
     using PyPlot, Random, CSV, Revise, Distributions, Dates, MultipleTesting
@@ -148,7 +148,8 @@ end
 try
     fit_file = joinpath(output_path, filter(x -> startswith(x, "Fit_Output_"), readdir(output_path))[1])
     pred_df = CSV.read(fit_file, DataFrame)
-    sample_to_phase = Dict(zip(pred_df.ID, pred_df.Phase))
+    # Convert phase from radians to hours (0-24)
+    sample_to_phase = Dict(zip(pred_df.ID, mod.(pred_df.Phase .* 24 ./ (2π), 24)))
     
     meta_file = joinpath(data_path, "metadata.csv")
     cell_types = [nothing]

@@ -1,1 +1,0 @@
-{"lr":0.0005,"phase/coherence":0.7982512636813317,"loss/cosine":0.2624102830886841,"phase/std":1.5510271787643433,"phase/range":6.273192405700684,"_wandb":{"runtime":24},"_runtime":24.131299453,"loss/mse":0.05248205363750458,"_step":199,"epoch":200,"phase/circular_variance":0.20482724905014038,"_timestamp":1.7651599031866965e+09}

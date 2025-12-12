@@ -1,8 +1,0 @@
-{"time":"2025-12-07T22:02:43.04696744-05:00","level":"INFO","msg":"using version","core version":"0.19.1"}
-{"time":"2025-12-07T22:02:43.04699352-05:00","level":"INFO","msg":"created symlink","path":"/home/rzh/zhenx/Circadian/TOAST_2/wandb/run-20251207_220243-wuotn9y9/logs/debug-core.log"}
-{"time":"2025-12-07T22:02:43.167607534-05:00","level":"INFO","msg":"created new stream","id":"wuotn9y9"}
-{"time":"2025-12-07T22:02:43.167687524-05:00","level":"INFO","msg":"stream: started","id":"wuotn9y9"}
-{"time":"2025-12-07T22:02:43.167733393-05:00","level":"INFO","msg":"writer: Do: started","stream_id":"wuotn9y9"}
-{"time":"2025-12-07T22:02:43.167756613-05:00","level":"INFO","msg":"sender: started","stream_id":"wuotn9y9"}
-{"time":"2025-12-07T22:02:43.167897743-05:00","level":"INFO","msg":"handler: started","stream_id":"wuotn9y9"}
-{"time":"2025-12-07T22:02:43.52014808-05:00","level":"INFO","msg":"Starting system monitor"}
