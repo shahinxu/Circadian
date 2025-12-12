@@ -5,7 +5,7 @@
 # --lr 0.001 \
 # --device cuda
 
-folder="GSE261698"
+folder="Zhang_CancerCell_2025_sub"
 
 for subdir in $(ls ../data/${folder}); do
 	echo "Processing ${subdir}..."
@@ -15,5 +15,14 @@ for subdir in $(ls ../data/${folder}); do
 		--num_epochs 2000 \
 		--lr 0.001 \
 		--device cuda
+	echo "Finished training ${subdir}"
+	
+	# Always generate plots after training
+	echo "Generating plots for ${subdir}..."
+	python plot_all_from_predictions.py --results_base "results/${folder}/${subdir}" || echo "Warning: Plot generation failed for ${subdir}"
 	echo "Finished ${subdir}"
 done
+
+# Generate comparison plot across all cell types
+echo "Generating comparison plot across all cell types..."
+python plot_all_from_predictions.py --results_base "results/${folder}" --compare_mode || echo "Warning: Comparison plot failed"

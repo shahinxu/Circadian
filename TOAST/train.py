@@ -218,20 +218,37 @@ def main():
     except Exception as e:
         print(f"[WARN] Failed to generate final prediction plot: {e}")
 
-    if not os.path.isfile(metadata):
-        try:
-            mouse_acrophases = [0, 0.0790637050481884, 0.151440116812406, 2.29555301890004, 2.90900605826091, 
-                                2.98706493493206, 2.99149022777511, 3.00769248308471, 3.1219769314524, 
-                                3.3058682224604, 3.31357155959037, 3.42557704861225, 3.50078722833753, 
-                                3.88658015146741, 4.99480367551318, 5.04951134876313, 6.00770260397838]
-            mouse_gene_symbol = ["Arntl", "Clock", "Npas2", "Nr1d1", "Bhlhe41", "Nr1d2", 
-                                "Dbp", "Ciart", "Per1", "Per3", "Tef", "Hlf", 
-                                "Cry2", "Per2", "Cry1", "Rorc", "Nfil3"]
-            preds_csv = os.path.join(save_dir, 'predictions.csv')
-            if os.path.isfile(preds_csv):
+    # Always perform acrophase-based alignment (do not use metadata time info - that's cheating)
+    try:
+        mouse_acrophases = [0, 0.0790637050481884, 0.151440116812406, 2.29555301890004, 2.90900605826091, 
+                            2.98706493493206, 2.99149022777511, 3.00769248308471, 3.1219769314524, 
+                            3.3058682224604, 3.31357155959037, 3.42557704861225, 3.50078722833753, 
+                            3.88658015146741, 4.99480367551318, 5.04951134876313, 6.00770260397838]
+        mouse_gene_symbol = ["Arntl", "Clock", "Npas2", "Nr1d1", "Bhlhe41", "Nr1d2", 
+                            "Dbp", "Ciart", "Per1", "Per3", "Tef", "Hlf", 
+                            "Cry2", "Per2", "Cry1", "Rorc", "Nfil3"]
+        preds_csv = os.path.join(save_dir, 'predictions.csv')
+        if os.path.isfile(preds_csv):
+            try:
+                aligned_df, shift_rad, per_gene_df = align_predictions_to_gene_acrophases(
+                    results_df=pd.read_csv(preds_csv),
+                    test_expr_file=train_file,
+                    gene_symbols=mouse_gene_symbol,
+                    ref_acrophases_rad=mouse_acrophases
+                )
+                aligned_csv = os.path.join(save_dir, 'predictions_aligned.csv')
+                aligned_df.to_csv(aligned_csv, index=False)
+                per_gene_csv = os.path.join(save_dir, 'alignment_gene_summary.csv')
+                per_gene_df.to_csv(per_gene_csv, index=False)
+                print(f"Applied acrophase-based alignment (shift={shift_rad:.4f} rad). Saved: {aligned_csv}")
+            except Exception as e:
+                print(f"[WARN] Failed to perform acrophase-based alignment: {e}")
+        else:
+            # If predictions_df already returned from evaluate_test_set, use that
+            if results_df is not None:
                 try:
                     aligned_df, shift_rad, per_gene_df = align_predictions_to_gene_acrophases(
-                        results_df=pd.read_csv(preds_csv),
+                        results_df=results_df,
                         test_expr_file=train_file,
                         gene_symbols=mouse_gene_symbol,
                         ref_acrophases_rad=mouse_acrophases
@@ -240,28 +257,11 @@ def main():
                     aligned_df.to_csv(aligned_csv, index=False)
                     per_gene_csv = os.path.join(save_dir, 'alignment_gene_summary.csv')
                     per_gene_df.to_csv(per_gene_csv, index=False)
-                    print(f"No metadata present — applied mouse-based alignment (shift={shift_rad:.4f} rad). Saved: {aligned_csv}")
+                    print(f"Applied acrophase-based alignment (shift={shift_rad:.4f} rad). Saved: {aligned_csv}")
                 except Exception as e:
-                    print(f"[WARN] Failed to perform automatic mouse-based alignment: {e}")
-            else:
-                # If predictions_df already returned from evaluate_test_set, use that
-                if results_df is not None:
-                    try:
-                        aligned_df, shift_rad, per_gene_df = align_predictions_to_gene_acrophases(
-                            results_df=results_df,
-                            test_expr_file=train_file,
-                            gene_symbols=mouse_gene_symbol,
-                            ref_acrophases_rad=mouse_acrophases
-                        )
-                        aligned_csv = os.path.join(save_dir, 'predictions_aligned.csv')
-                        aligned_df.to_csv(aligned_csv, index=False)
-                        per_gene_csv = os.path.join(save_dir, 'alignment_gene_summary.csv')
-                        per_gene_df.to_csv(per_gene_csv, index=False)
-                        print(f"No metadata present — applied mouse-based alignment (shift={shift_rad:.4f} rad). Saved: {aligned_csv}")
-                    except Exception as e:
-                        print(f"[WARN] Failed to perform automatic mouse-based alignment: {e}")
-        except Exception as e:
-            print(f"[WARN] Unexpected error while attempting automatic alignment: {e}")
+                    print(f"[WARN] Failed to perform acrophase-based alignment: {e}")
+    except Exception as e:
+        print(f"[WARN] Unexpected error while attempting acrophase alignment: {e}")
 
     if args.align_gene_symbols and args.align_acrophases:
         try:
