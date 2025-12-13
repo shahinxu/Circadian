@@ -1987,6 +1987,7 @@ end
 function SVDTransform!(expression_data, ops)
 	
 	my_info("TRANSFORMING SEED GENES INTO EIGEN SPACE.")
+	my_info("SVD INPUT MATRIX SIZE: $(size(expression_data, 1)) genes × $(size(expression_data, 2)) samples")
 
 	svd_obj_l = svd(expression_data)
 	ops[:o_svd_S] = Array{Float32,1}(svd_obj_l.S)
@@ -2137,30 +2138,6 @@ function SVDReduceDimensions(S, S_logical, ops)
 end
 
 function CovariateOnehotEncoder!(Transform, ops)
-	#=
-	are_there_discontinuous_covariates = (length(ops[:o_dco]) > 0)
-	are_there_continuous_covariates = (length(ops[:o_cc]) > 0)
-	are_there_covariates = are_there_discontinuous_covariates | are_there_continuous_covariates
-	are_covariates_being_used  = ops[:out_covariates]
-	are_discontinuous_covariates_used = ops[:out_use_disc_cov]
-	are_all_discontinuous_covariates_used = ops[:out_all_disc_cov]
-	which_discontinuous_covariates_are_used = ops[:out_disc_cov]
-	are_more_than_one_discontinuous_covariate_used = length(ops[:out_disc_cov]) > 1
-	are_continuous_covariates_used = ops[:out_use_cont_cov]
-	are_all_continuous_covariates_used = ops[:out_all_cont_cov]
-	are_continuous_covariates_normalized = ops[:out_use_norm_cont_cov]
-	are_all_continuous_covariates_normalized = ops[:out_all_norm_cont_cov]
-	which_continuous_covariates_are_used = ops[:out_cont_cov]
-	which_continuous_covariates_are_normalized = ops[:out_norm_cont_cov]
-
-	if are_there_covariates & are_covariates_being_used
-		scale_array = Array{Any}([])
-		if are_there_discontinuous_covariates & are_discontinuous_covariates_used
-			if are_all_discontinuous_covariates_used # | 
-			end
-		end
-	end
-	=#
 	Transform_copy = deepcopy(Transform)
 	are_there_discontinuous_covariates = !(ismissing(ops[:o_dco]))
 	are_there_continuous_covariates = !(ismissing(ops[:o_cc]))
