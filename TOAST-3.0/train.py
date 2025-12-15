@@ -9,7 +9,11 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 import argparse
 import os
-from set_transformer import SetPhaseAutoEncoder
+from model import (
+    SetPhaseAutoEncoder, 
+    compute_pairwise_phase_cosine, 
+    compute_pairwise_expression_cosine
+)
 from data_load import load_and_preprocess_train_data, load_and_preprocess_test_data
 from torch.utils.data import DataLoader
 from utils import predict_and_save_phases
@@ -18,13 +22,10 @@ from datetime import datetime
 import torch.nn.functional as F
 
 def plot_express(expression_data, phases, save_path, n_plot=5):
-    """Plot expression profiles of top genes ordered by phase"""
     order = np.argsort(phases)
     phases_sorted = phases[order]
     expr_sorted = expression_data[order]
     n_genes = expr_sorted.shape[1]
-    
-    # Plot only a subset of genes for visualization
     n_plot = min(n_plot, n_genes)
     plt.figure(figsize=(8, 6))
     for i in range(n_plot):
@@ -47,7 +48,6 @@ def train_model(
     device='cuda',
     save_dir='./model_checkpoints'
 ):
-    """Train model with reconstruction loss only"""
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=100)
@@ -55,48 +55,50 @@ def train_model(
     os.makedirs(save_dir, exist_ok=True)
     train_losses = []
     
-    # Prepare data: all samples as one set
     all_expressions = [train_dataset[i]['expression'] for i in range(len(train_dataset))]
     X_all = torch.stack(all_expressions).to(device)
     X_all = X_all / (torch.norm(X_all, dim=1, keepdim=True) + 1e-8)
-    X_input = X_all.unsqueeze(0)  # [1, n_samples, n_genes]
+    X_input = X_all.unsqueeze(0)
 
     model.train()
     
     for epoch in range(num_epochs):
         optimizer.zero_grad()
         
-        # Forward pass (no need for embeddings)
-        phase_coords, pred_phases, recon = model(X_input, return_embeddings=False)
+        phase_coords, pred_phases = model(X_input, return_embeddings=False)
         
-        # Reconstruction loss (cosine similarity)
-        recon_loss = 1 - F.cosine_similarity(recon, X_input, dim=2).mean()
+        phase_cos_matrix = compute_pairwise_phase_cosine(phase_coords)
+        expr_cos_matrix = compute_pairwise_expression_cosine(X_input)
+        pairwise_loss = F.mse_loss(phase_cos_matrix, expr_cos_matrix)
         
-        recon_loss.backward()
+        pairwise_loss.backward()
         optimizer.step()
         
         # Logging
-        loss_val = recon_loss.item()
+        loss_val = pairwise_loss.item()
         train_losses.append(loss_val)
         
         scheduler.step(loss_val)
         
         if epoch % 50 == 0:
-            print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss_val:.4f}")
+            # Compute correlation for monitoring
+            with torch.no_grad():
+                phase_flat = phase_cos_matrix.flatten()
+                expr_flat = expr_cos_matrix.flatten()
+                corr = torch.corrcoef(torch.stack([phase_flat, expr_flat]))[0, 1]
+            print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss_val:.4f}, Corr: {corr:.4f}")
 
-    # Evaluation
     model.eval()
     with torch.no_grad():
-        _, pred_phases, _ = model(X_input, return_embeddings=False)
+        _, pred_phases = model(X_input, return_embeddings=False)
     
     pred_phases_np = pred_phases.squeeze(0).detach().cpu().numpy()
     pred_order_relative = np.argsort(pred_phases_np)
     
-    # Plot training curve
     plt.figure(figsize=(8, 5))
     plt.plot(train_losses)
     plt.xlabel('Epoch')
-    plt.ylabel('Reconstruction Loss')
+    plt.ylabel('Pairwise Cosine Loss')
     plt.title('Training Loss')
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -154,7 +156,7 @@ def evaluate_test_set(
 
     model.eval()
     with torch.no_grad():
-        _, pred_phases, recon = model(X_input, return_embeddings=False)
+        _, pred_phases = model(X_input, return_embeddings=False)
     pred_phases_np = pred_phases.squeeze(0).cpu().numpy()
     
     period = preprocessing_info.get('period_hours', 24.0)

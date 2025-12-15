@@ -4,18 +4,16 @@
 # Single dataset example
 # python train.py \
 #     --dataset_path "GSE54651/aorta" \
-#     --num_epochs 2000 \
+#     --num_epochs 1000 \
 #     --lr 0.001 \
 #     --device cuda \
 #     --d_model 128 \
 #     --use_isab \
 #     --num_inducing_points 32
 
-# Batch processing: process all subdirectories in a dataset folder
 DATASET_FOLDER="GTEx"
 
 for subdir in $(ls ../data/${DATASET_FOLDER}); do
-    # Skip if not a directory
     if [ ! -d "../data/${DATASET_FOLDER}/${subdir}" ]; then
         continue
     fi
@@ -37,5 +35,5 @@ for subdir in $(ls ../data/${DATASET_FOLDER}); do
     echo ""
 done
 
-echo "All subdirectories processed!"
+# echo "All subdirectories processed!"
 
