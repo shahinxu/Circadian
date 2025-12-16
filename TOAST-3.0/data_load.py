@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import Dataset
 from sklearn.preprocessing import StandardScaler
 import gc
-
+import os
 
 class ExpressionDataset(Dataset):
     def __init__(self, expressions, tissue_labels=None):
@@ -36,15 +36,13 @@ def blunt_percentile(data, percent=0.975):
 
 def load_and_preprocess_train_data(
         train_file,
-        blunt_percent=0.975
+        blunt_percent=0.975,
+        use_seed_genes=False
     ):
     print("=== Loading training data ===")
     df = pd.read_csv(train_file, low_memory=False)
     sample_columns = [col for col in df.columns if col != 'Gene_Symbol']
     gene_df = df[~df['Gene_Symbol'].isin(['time_C'])].copy()
-    
-    # Load metadata for tissue labels
-    import os
     train_dir = os.path.dirname(train_file)
     metadata_path = os.path.join(train_dir, 'metadata.csv')
     tissue_labels = None
@@ -55,11 +53,8 @@ def load_and_preprocess_train_data(
         print(f"Loading metadata from {metadata_path}")
         metadata_df = pd.read_csv(metadata_path)
         if 'Sample' in metadata_df.columns and 'Tissue' in metadata_df.columns:
-            # Create a mapping from sample name to tissue
             sample_to_tissue = dict(zip(metadata_df['Sample'], metadata_df['Tissue']))
-            # Get tissue labels for each sample in sample_columns
             tissue_labels = [sample_to_tissue.get(col, 'unknown') for col in sample_columns]
-            # Create tissue to index mapping
             unique_tissues = sorted(set(tissue_labels))
             tissue_to_idx = {tissue: idx for idx, tissue in enumerate(unique_tissues)}
             tissue_indices = [tissue_to_idx[t] for t in tissue_labels]
@@ -70,31 +65,21 @@ def load_and_preprocess_train_data(
     else:
         print("No metadata.csv found, tissue labels will not be available")
     
-    # Load seed genes if available
     seed_genes_path = os.path.join(train_dir, 'seed_genes.txt')
     
-    if os.path.exists(seed_genes_path):
+    if os.path.exists(seed_genes_path) and use_seed_genes:
         print(f"Loading seed genes from {seed_genes_path}")
         with open(seed_genes_path, 'r') as f:
             seed_genes = set(line.strip().upper() for line in f if line.strip())
         print(f"Found {len(seed_genes)} seed genes")
-        
         gene_df['Gene_Symbol_Upper'] = gene_df['Gene_Symbol'].str.upper()
-        
-        # Filter to keep only genes in seed_genes
         before_filter = len(gene_df)
         gene_df = gene_df[gene_df['Gene_Symbol_Upper'].isin(seed_genes)].copy()
         after_filter = len(gene_df)
-        
         print(f"Filtered genes: {before_filter} -> {after_filter} (kept {after_filter} seed genes)")
-        
-        # Remove the temporary uppercase column
         gene_df = gene_df.drop(columns=['Gene_Symbol_Upper'])
-        
-        if len(gene_df) == 0:
-            raise ValueError("No genes remain after filtering with seed_genes.txt")
     else:
-        print("No seed_genes.txt found, processing all genes")
+        print("Disabled seed_genes.txt, processing all genes")
     
     initial_gene_symbols = gene_df['Gene_Symbol'].values
     sample_df = gene_df[sample_columns].copy()

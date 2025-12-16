@@ -28,7 +28,7 @@ for subdir in $(ls ../data/${DATASET_FOLDER}); do
         --lr 0.001 \
         --device cuda \
         --d_model 128 \
-        --use_isab \
+        # --use_isab \
         --num_inducing_points 32
     
     echo "Finished: ${subdir}"

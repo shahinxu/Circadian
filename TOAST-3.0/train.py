@@ -198,12 +198,12 @@ def main():
     parser.add_argument("--random_seed", type=int, default=42)
     
     # Set Transformer parameters
-    parser.add_argument("--d_model", type=int, default=128, help="Hidden dimension")
-    parser.add_argument("--num_heads", type=int, default=4, help="Number of attention heads")
-    parser.add_argument("--num_layers", type=int, default=2, help="Number of SAB/ISAB layers")
-    parser.add_argument("--use_isab", action='store_true', help="Use ISAB for efficiency (O(N) vs O(N^2))")
-    parser.add_argument("--num_inducing_points", type=int, default=32, help="Number of inducing points for ISAB")
-    
+    parser.add_argument("--d_model", type=int, default=128)
+    parser.add_argument("--num_heads", type=int, default=4)
+    parser.add_argument("--num_layers", type=int, default=2)
+    parser.add_argument("--use_isab", action='store_true')
+    parser.add_argument("--num_inducing_points", type=int, default=32)
+    parser.add_argument("--use_seed_genes", type=bool, default=False)
     args = parser.parse_args()
 
     base_data = f"../data/{args.dataset_path}"
@@ -219,7 +219,7 @@ def main():
 
     os.makedirs(save_dir, exist_ok=True)
 
-    train_dataset, preprocessing_info = load_and_preprocess_train_data(train_file)
+    train_dataset, preprocessing_info = load_and_preprocess_train_data(train_file, use_seed_genes=args.use_seed_genes)
 
     preprocessing_info['period_hours'] = args.period_hours
 
