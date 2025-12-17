@@ -11,7 +11,7 @@
 #     --use_isab \
 #     --num_inducing_points 32
 
-DATASET_FOLDER="GTEx"
+DATASET_FOLDER="GSE54652"
 
 for subdir in $(ls ../data/${DATASET_FOLDER}); do
     if [ ! -d "../data/${DATASET_FOLDER}/${subdir}" ]; then
@@ -29,7 +29,8 @@ for subdir in $(ls ../data/${DATASET_FOLDER}); do
         --device cuda \
         --d_model 128 \
         # --use_isab \
-        --num_inducing_points 32
+        # --num_inducing_points 32 \
+        # --use_seed_genes False
     
     echo "Finished: ${subdir}"
     echo ""
