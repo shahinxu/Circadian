@@ -331,16 +331,18 @@ for zhang_dataset in zhang_datasets
     println("  dataFile2 (GTEx+Zhang combined): $(size(gtex_zhang_combined))")
     println("  Seed genes: $(length(seed_genes))")
     
-    # 手动修复协变量类型：确保 TissueType_D 行的所有值都是 String 类型
-    # 这是为了避免 Matrix{Any} 类型问题
+    if length(sample_ids_with_collection_times) > 0
+        training_parameters[:train_sample_id] = sample_ids_with_collection_times
+        training_parameters[:train_sample_phase] = sample_collection_times
+        println("  Using collection times for $(length(sample_collection_times)) GTEx samples")
+    else
+        println("  WARNING: No collection time data - model may not learn circadian patterns!")
+    end
+    
     function fix_covariate_types!(df::DataFrame)
-        # 检查第一行是否是 TissueType_D
         if string(df[1, 1]) == "TissueType_D"
-            # 将第一行的所有值转换为 String，并确保列类型正确
             for col_name in names(df)[2:end]
-                # 获取第一行的值并确保是 String
                 first_val = String(df[1, col_name])
-                # 创建一个新的列，第一行是 String，其余是原值
                 new_col = Vector{Any}(undef, nrow(df))
                 new_col[1] = first_val
                 for i in 2:nrow(df)
