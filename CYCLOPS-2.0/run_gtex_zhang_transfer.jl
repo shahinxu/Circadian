@@ -194,6 +194,10 @@ training_parameters[:align_acrophases] = [0, 0.0790637050481884, 0.1514401168124
                                           3.00769248308471, 3.1219769314524, 3.3058682224604, 
                                           3.31357155959037, 3.42557704861225, 3.50078722833753, 
                                           3.88658015146741, 4.99480367551318, 6.00770260397838]
+
+# 添加cosine shift迭代数以提高稳定性
+training_parameters[:cosine_shift_iterations] = 48  # 降低迭代数，减少数值不稳定
+
 println("\n=== Initializing Distributed Computing ===")
 n_workers = min(80, length(Sys.cpu_info()))
 Distributed.addprocs(n_workers)
