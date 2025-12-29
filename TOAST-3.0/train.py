@@ -15,8 +15,6 @@ from model import (
     compute_pairwise_expression_cosine
 )
 from data_load import load_and_preprocess_train_data, load_and_preprocess_test_data
-from torch.utils.data import DataLoader
-from utils import predict_and_save_phases
 from utils import align_predictions_to_gene_acrophases
 from datetime import datetime
 import torch.nn.functional as F

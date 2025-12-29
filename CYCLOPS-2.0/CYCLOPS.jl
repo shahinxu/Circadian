@@ -1615,7 +1615,7 @@ function BluntXthPercentile(dataFile::T, options; OUT_TYPE = DataFrame) where T 
 		data[ii, above_max_logical] .= row_max[ii]
 	end
 	if OUT_TYPE == DataFrame
-		bluntedDataFile = DataFrame(hcat(Array(dataFile[:, 1]), vcat(Array(dataFile[1:options[:o_fxr]-1, :]), data)), names(dataFile))
+		bluntedDataFile = DataFrame(hcat(Array(dataFile[:, 1]), vcat(Array(dataFile[1:options[:o_fxr]-1, 2:end]), data)), names(dataFile))
 		return bluntedDataFile
 	end
 	output_data = Array{OUT_TYPE, 2}(data)
@@ -2675,7 +2675,7 @@ function TransferFit_d1(dataFile1::DataFrame, dataFile2::DataFrame, genesOfInter
 
 	if no_covariates
 		transfer_trained_models = MultiTrainOrder(initialized_models, dataFile2_transform, dataFile2_ops)
-		best_model, model_metrics = OrderDecoder(transfer_trained_models, eigen_data)
+		best_model, model_metrics = OrderDecoder(transfer_trained_models, dataFile2_transform)
 	else
 		transfer_trained_models = MultiTrainCovariates(initialized_models, dataFile2_transform, dataFile2_ops)
 		best_model, model_metrics = CovariatesDecoder(transfer_trained_models, dataFile2_transform)
@@ -3142,6 +3142,19 @@ end
 
 function covariates_0_check(raw_covariates::Array{T,2}) where T <: AbstractString
 	return hcat(mapslices(x -> [covariates_0_check(x)], raw_covariates, dims=2)[:]...)
+end
+
+# 添加对 Matrix{Any} 的支持，转换为 Matrix{String}
+function covariates_0_check(raw_covariates::Array{Any,2}, use_all::Bool, which_cov::Int64, n_samples::Int64)
+	# 将 Matrix{Any} 转换为 Matrix{String}
+	string_covariates = String.(raw_covariates)
+	return covariates_0_check(string_covariates, use_all, which_cov, n_samples)
+end
+
+function covariates_0_check(raw_covariates::Array{Any,2}, use_all::Bool, which_cov::Array{Int64,1}, n_samples::Int64)
+	# 将 Matrix{Any} 转换为 Matrix{String}
+	string_covariates = String.(raw_covariates)
+	return covariates_0_check(string_covariates, use_all, which_cov, n_samples)
 end
 
 function covariates_0_check(raw_covariates::Array{T,2}, use_all::Bool, which_cov::Int64, n_samples::Int64) where T <: AbstractString

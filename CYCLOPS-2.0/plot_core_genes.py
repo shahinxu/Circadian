@@ -3,30 +3,44 @@
 Plot expression patterns of core clock genes aligned by predicted phases from CYCLOPS
 """
 
+import argparse
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-import sys
 
 # Core clock genes used for alignment (human gene names)
 CORE_GENES = ["ARNTL", "CLOCK", "NPAS2", "NR1D1", "BHLHE41", "NR1D2", 
               "DBP", "CIART", "PER1", "PER3", "TEF", "HLF", 
               "CRY2", "PER2", "CRY1", "RORC", "NFIL3"]
 
-def load_data(result_dir):
+def load_data(result_dir, phase_file=None):
     """Load CYCLOPS results and expression data"""
-    result_path = Path(result_dir)
+    result_path = Path(result_dir).expanduser().resolve()
     
     # Load predicted phases
-    phase_file = list(result_path.glob("Fit_Output_*.csv"))[0]
-    phases_df = pd.read_csv(phase_file)
+    if phase_file is not None:
+        phase_path = Path(phase_file)
+        if not phase_path.is_absolute():
+            relative_candidate = result_path / phase_path
+            if relative_candidate.exists():
+                phase_path = relative_candidate
+        if not phase_path.exists():
+            raise FileNotFoundError(f"Phase file not found: {phase_file}")
+    else:
+        phase_candidates = sorted(result_path.glob("Fit_Output_*.csv"))
+        if not phase_candidates:
+            raise FileNotFoundError(f"No Fit_Output CSV found in {result_dir}")
+        phase_path = phase_candidates[0]
+    print(f"Using phase file: {phase_path}")
+    phases_df = pd.read_csv(phase_path)
     phases_df = phases_df.rename(columns={'ID': 'Sample'})
     phases_df = phases_df[['Sample', 'Phase']].copy()
     phases_df['Phase'] = pd.to_numeric(phases_df['Phase'], errors='coerce')
     
     # Load expression data
-    expr_file = Path(result_dir).parent.parent.parent / "data/Zhang_CancerCell_2025_all/expression.csv"
+    expr_file = result_path.parents[2] / "data/Zhang_CancerCell_2025_all/expression.csv"
+    expr_file = expr_file.resolve()
     expr_df = pd.read_csv(expr_file, low_memory=False)
     
     # First row is CellType_D
@@ -46,7 +60,7 @@ def load_data(result_dir):
     
     return phases_df, expr_df, celltype_map
 
-def plot_core_genes_expression(phases_df, expr_df, celltype_map, output_dir):
+def plot_core_genes_expression(phases_df, expr_df, celltype_map, output_dir, celltype_filter=None):
     """Plot aligned expression for core genes, separated by cell type"""
     
     # Filter for core genes present in data
@@ -80,6 +94,12 @@ def plot_core_genes_expression(phases_df, expr_df, celltype_map, output_dir):
     
     # Get unique cell types
     celltypes = sorted(plot_df['CellType'].unique())
+    if celltype_filter:
+        requested = {ct.strip() for entry in celltype_filter for ct in entry.split(',') if ct.strip()}
+        missing = requested - set(celltypes)
+        if missing:
+            print(f"Warning: requested cell types not found in data: {', '.join(sorted(missing))}")
+        celltypes = [ct for ct in celltypes if ct in requested] or celltypes
     print(f"\nFound {len(celltypes)} cell types: {', '.join(celltypes)}")
     
     # Plot for each cell type
@@ -216,17 +236,24 @@ def plot_celltype_genes(plot_df, available_genes, celltype, output_dir):
     plt.close()
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        result_dir = sys.argv[1]
-    else:
-        result_dir = "/home/rzh/zhenx/Circadian/CYCLOPS-2.0/results/Zhang_CancerCell_2025_all_20251208_170431"
+    parser = argparse.ArgumentParser(description="Plot aligned expression for core clock genes")
+    parser.add_argument("result_dir", nargs="?", 
+                        default="/home/rzh/zhenx/Circadian/CYCLOPS-2.0/results/Zhang_CancerCell_2025_all_20251208_170431",
+                        help="Path to a CYCLOPS results directory")
+    parser.add_argument("--phase-file", dest="phase_file", default=None,
+                        help="Optional explicit path to the predicted phases CSV (e.g., Tumor_Bcell_Fit_Output.csv)")
+    parser.add_argument("--celltype", dest="celltypes", action="append", default=None,
+                        help="Restrict plots to one or more cell types (repeat flag or use comma-separated list)")
+
+    args = parser.parse_args()
+    result_dir = args.result_dir
     
     print(f"Loading data from: {result_dir}")
-    phases_df, expr_df, celltype_map = load_data(result_dir)
+    phases_df, expr_df, celltype_map = load_data(result_dir, phase_file=args.phase_file)
     
     print(f"\nLoaded {len(phases_df)} samples with predicted phases")
     print(f"Loaded {len(expr_df)} genes")
     
-    plot_core_genes_expression(phases_df, expr_df, celltype_map, result_dir)
+    plot_core_genes_expression(phases_df, expr_df, celltype_map, result_dir, celltype_filter=args.celltypes)
     
     print("\nDone!")

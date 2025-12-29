@@ -1,4 +1,4 @@
-# *.csv
+*.csv
 *.png
 *.jpg
 __pycache__
@@ -6,3 +6,5 @@ __pycache__
 big_data
 wandb
 *.log
+*.h5ad
+*.txt
