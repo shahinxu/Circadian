@@ -10,6 +10,28 @@ DEFAULT_GENES = [
     "RORC", "NFIL3"
 ]
 
+# Ideal (mouse) acrophases used in original CYCLOPS.jl (radians),
+# ordered to match DEFAULT_GENES above.
+CANONICAL_MOUSE_ACROPHASES_RAD = {
+    "ARNTL": 0.0,
+    "CLOCK": 0.0790637050481884,
+    "NPAS2": 0.151440116812406,
+    "NR1D1": 2.29555301890004,
+    "BHLHE41": 2.90900605826091,
+    "NR1D2": 2.98706493493206,
+    "DBP": 2.99149022777511,
+    "CIART": 3.00769248308471,
+    "PER1": 3.1219769314524,
+    "PER3": 3.3058682224604,
+    "TEF": 3.31357155959037,
+    "HLF": 3.42557704861225,
+    "CRY2": 3.50078722833753,
+    "PER2": 3.88658015146741,
+    "CRY1": 4.99480367551318,
+    "RORC": 5.04951134876313,
+    "NFIL3": 6.00770260397838,
+}
+
 
 def find_latest_subdir(base_path):
     """Find the most recent timestamp subdirectory"""
@@ -171,34 +193,172 @@ def plot_acrophase_circle(fit_df, out_png, title=None):
         return
     
     genes = fit_df['Gene'].astype(str).tolist()
+    genes_upper = [g.upper() for g in genes]
     phases = fit_df['phase_rad'].astype(float).values
     amps = fit_df['amplitude'].astype(float).values
     
+    # Normalize amplitudes for marker size (outer ring)
     amp_norm = np.nan_to_num(amps, nan=0.0)
     if amp_norm.max() > 0:
-        radii = 0.3 + 0.7 * (amp_norm / amp_norm.max())
+        sizes = 80 + 320 * (amp_norm / amp_norm.max())
     else:
-        radii = np.full_like(amp_norm, 0.6)
-    
+        sizes = np.full_like(amp_norm, 120.0)
+
     fig = plt.figure(figsize=(6, 6))
     ax = fig.add_subplot(111, polar=True)
-    ax.set_theta_zero_location('N')
-    ax.set_theta_direction(-1)
-    
-    sc = ax.scatter(phases, radii, c=radii, cmap='viridis', s=60, zorder=3)
-    
-    for (g, th, r) in zip(genes, phases, radii):
-        label_r = r + 0.06
-        ax.text(th, label_r, g, ha='center', va='center', fontsize=9,
-                bbox=dict(boxstyle='round,pad=0.1', fc='white', alpha=0.8))
-    
-    ax.set_rmax(1.05)
-    ax.set_rticks([])
-    
-    hours = np.array([0, 4, 8, 12, 16, 20])
+
+    # Match overall style to CYCLOPS Acrophase plots
+    ax.set_theta_zero_location('N')  # 0 at top
+    ax.set_theta_direction(-1)       # clockwise
+    ax.spines["polar"].set_visible(False)
+    ax.set_ylim(0, 1.25)
+    ax.set_yticks([0, 0.5, 1.0])
+    ax.set_yticklabels(["", "", ""])
+    # Keep radial gridlines (grey circles), hide angular gridlines to match CYCLOPS style
+    ax.yaxis.grid(True)
+    ax.xaxis.grid(False)
+
+    # Outer ring: estimated acrophases from TOAST fits (r=1)
+    outer_r = np.ones_like(phases)
+    ax.scatter(
+        phases,
+        outer_r,
+        s=sizes,
+        c="C0",
+        alpha=0.85,
+        edgecolors="black",
+        linewidths=0.4,
+        label="Estimated",
+        zorder=3,
+    )
+
+    # Inner ring: canonical mouse acrophases from CYCLOPS (if available)
+    inner_phases = []
+    inner_labels = []
+    for g_up in genes_upper:
+        if g_up in CANONICAL_MOUSE_ACROPHASES_RAD:
+            inner_phases.append(CANONICAL_MOUSE_ACROPHASES_RAD[g_up])
+            inner_labels.append(g_up)
+
+    if inner_phases:
+        inner_phases = np.array(inner_phases, dtype=float)
+        # Place canonical phases exactly on the middle radial gridline (r=0.5)
+        inner_r = np.full_like(inner_phases, 0.5)
+        ax.scatter(
+            inner_phases,
+            inner_r,
+            s=55,
+            c="orange",
+            alpha=0.9,
+            edgecolors="black",
+            linewidths=0.4,
+            label="Canonical",
+            zorder=3,
+        )
+
+        # Label canonical genes outside their points with CYCLOPS-like spacing along the ring
+        inner_label_r = float(inner_r[0]) + 0.25
+        # Use a dynamic minimum angular separation that grows with gene count
+        base_space = np.pi / 35.5
+        n_inner = inner_phases.size
+        # Target roughly uniform coverage if all labels were on one ring
+        dynamic_space = 2 * np.pi / (n_inner + 2) * 0.6
+        space_factor = max(base_space, dynamic_space)
+
+        inner_labels = np.array(inner_labels, dtype=str)
+
+        # Choose "middle" gene near circular mean of canonical phases
+        # Use complex mean to get circular mean angle
+        mean_vec = np.exp(1j * inner_phases).mean()
+        mean_angle = float(np.angle(mean_vec) % (2 * np.pi))
+        # Find gene whose canonical phase is closest to the mean
+        ang_diff = np.arccos(np.cos(inner_phases - mean_angle))
+        middle_idx = int(np.argmin(ang_diff))
+        middle_phase = inner_phases[middle_idx]
+
+        # Annotate the middle canonical gene straight outwards
+        ax.annotate(
+            inner_labels[middle_idx],
+            xy=(middle_phase, inner_r[middle_idx]),
+            xytext=(middle_phase, inner_label_r),
+            ha="center",
+            va="center",
+            fontsize=6,
+            arrowprops=dict(arrowstyle="->", color="gray", linewidth=0.6),
+        )
+
+        # Split remaining genes to the two sides of the middle gene (by angular distance sign)
+        dist_from_middle = middle_phase - inner_phases
+        larger_mask = dist_from_middle < 0   # phases larger than middle
+        smaller_mask = dist_from_middle > 0  # phases smaller than middle
+
+        # Handle larger-than-middle side: move labels forward to keep at least space_factor separation
+        larger_indices = np.where(larger_mask)[0]
+        if larger_indices.size > 0:
+            larger_phases = inner_phases[larger_indices]
+            order = np.argsort(larger_phases)  # ascending
+            sorted_phases = larger_phases[order]
+            sorted_idx = larger_indices[order]
+
+            prev_angle = middle_phase
+            for ph, idx in zip(sorted_phases, sorted_idx):
+                label_angle = ph
+                if label_angle - prev_angle < space_factor:
+                    label_angle = prev_angle + space_factor
+                # keep angles in [0, 2π)
+                label_angle = float(label_angle % (2 * np.pi))
+                ax.annotate(
+                    inner_labels[idx],
+                    xy=(ph, inner_r[idx]),
+                    xytext=(label_angle, inner_label_r),
+                    ha="center",
+                    va="center",
+                    fontsize=6,
+                    arrowprops=dict(arrowstyle="->", color="gray", linewidth=0.6),
+                )
+                prev_angle = label_angle
+
+        # Handle smaller-than-middle side: move labels backward to keep at least space_factor separation
+        smaller_indices = np.where(smaller_mask)[0]
+        if smaller_indices.size > 0:
+            smaller_phases = inner_phases[smaller_indices]
+            order = np.argsort(smaller_phases)[::-1]  # descending
+            sorted_phases = smaller_phases[order]
+            sorted_idx = smaller_indices[order]
+
+            prev_angle = middle_phase
+            for ph, idx in zip(sorted_phases, sorted_idx):
+                label_angle = ph
+                if prev_angle - label_angle < space_factor:
+                    label_angle = prev_angle - space_factor
+                # keep angles in [0, 2π)
+                label_angle = float(label_angle % (2 * np.pi))
+                ax.annotate(
+                    inner_labels[idx],
+                    xy=(ph, inner_r[idx]),
+                    xytext=(label_angle, inner_label_r),
+                    ha="center",
+                    va="center",
+                    fontsize=6,
+                    arrowprops=dict(arrowstyle="->", color="gray", linewidth=0.6),
+                )
+                prev_angle = label_angle
+
+    # Label estimated genes just outside outer ring
+    label_r = 1.12
+    for g, th in zip(genes_upper, phases):
+        ax.text(th, label_r, g, ha='center', va='center', fontsize=8)
+
+    # Phase ticks in hours
+    hours = np.array([0, 6, 12, 18])
     ticks = hours * (2 * np.pi / 24.0)
     ax.set_xticks(ticks)
-    ax.set_xticklabels([f"{h}/24" if h == 0 else f"{h}" for h in hours])
+    ax.set_xticklabels([f"{h}" for h in hours])
+
+    # Legend (only if both rings exist)
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(loc="lower right", bbox_to_anchor=(1.15, -0.05))
     
     if title:
         plt.title(title)
