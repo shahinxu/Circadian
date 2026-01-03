@@ -13,8 +13,8 @@ local_cyclops_file = joinpath(@__DIR__, "CYCLOPS.jl")
 
 gtex_dataset = "GTEx_adipose_subcutaneous"
 zhang_datasets = [
-    "GSE176078"
-]  # Tumor subsets to iterate through
+    "GSE176078_CancerEpithelial",
+]  # Tumor subsets to iterate through (e.g. GSE176078_CancerEpithelial)
 
 gtex_path = joinpath(data_path, "GTEx", gtex_dataset)
 zhang_base_path = joinpath(data_path, "Zhang_CancerCell_2025_sub")
@@ -210,7 +210,14 @@ for zhang_dataset in zhang_datasets
 
     # 根据数据集名称确定路径
     if startswith(zhang_dataset, "GSE")
-        zhang_path = joinpath(data_path, zhang_dataset)
+        parts = split(zhang_dataset, "_")
+        base = parts[1]
+        if length(parts) > 1
+            tissue = join(parts[2:end], "_")
+            zhang_path = joinpath(data_path, base, tissue)
+        else
+            zhang_path = joinpath(data_path, base)
+        end
     else
         zhang_path = joinpath(zhang_base_path, zhang_dataset)
     end

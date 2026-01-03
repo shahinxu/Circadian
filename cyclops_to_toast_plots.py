@@ -72,10 +72,21 @@ def infer_expression_path(project_root: Path, dataset_name: str) -> Path:
 
     data_root = project_root / "data"
 
+    # 0) Explicit mapping for GSE176078 subsets
+    if dataset_name == "CancerEpithelial":
+        expr = data_root / "GSE176078" / "CancerEpithelial" / "expression.csv"
+        if expr.exists():
+            return expr
+    if dataset_name == "NormalEpithelial":
+        expr = data_root / "GSE176078" / "NormalEpithelial" / "expression.csv"
+        if expr.exists():
+            return expr
+
     # 1) GTEx_Zhang_Transfer_* cases
     if dataset_name.startswith("GTEx_Zhang_Transfer_"):
         tail = dataset_name[len("GTEx_Zhang_Transfer_"):]
-        base = tail.split("_")[0]  # e.g. Bcell, CD4Tcell, GSE176078
+        parts = tail.split("_")
+        base = parts[0]  # e.g. Bcell, CD4Tcell, GSE176078
 
         # Tumor cell types from Zhang_CancerCell_2025_sub
         zhang_cells = {"Bcell", "CD4Tcell", "CD8Tcell", "Myeloid", "NKcell"}
@@ -84,8 +95,17 @@ def infer_expression_path(project_root: Path, dataset_name: str) -> Path:
             if expr.exists():
                 return expr
 
-        # Transfer to a specific GSE dataset (e.g. GSE176078)
+        # Transfer to a specific GSE dataset (e.g. GSE176078 or GSE176078_CancerEpithelial_...)
         if base.startswith("GSE"):
+            # If there is a subset token, map to data/<GSE>/<subset>/expression.csv
+            # e.g. tail = "GSE176078_CancerEpithelial_20260102_230842" -> subset = "CancerEpithelial"
+            if len(parts) >= 2:
+                subset = parts[1]
+                expr = data_root / base / subset / "expression.csv"
+                if expr.exists():
+                    return expr
+
+            # Fallback: dataset without subdirectory
             expr = data_root / base / "expression.csv"
             if expr.exists():
                 return expr
