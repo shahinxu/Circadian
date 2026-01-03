@@ -2,13 +2,16 @@ using DataFrames, Statistics, StatsBase, LinearAlgebra, MultivariateStats
 using DataFrames: Not, ByRow
 using PyPlot, Distributed, Random, CSV, Revise, Distributions, Dates, MultipleTesting
 
-base_path = normpath(joinpath(@__DIR__, ".."))
+base_path = normpath(joinpath(@__DIR__, "..", ".."))
 data_path = joinpath(base_path, "data")
 cyclops_path = joinpath(base_path, "CYCLOPS-2.0")
 output_path = joinpath(cyclops_path, "results")
 output_path_warmup = joinpath(output_path, "warmup")
 
-gtex_dataset = "GTEx_spleen"
+# Use the CYCLOPS implementation in the GTEx_based directory for transfer runs
+local_cyclops_file = joinpath(@__DIR__, "CYCLOPS.jl")
+
+gtex_dataset = "GTEx_adipose_subcutaneous"
 zhang_datasets = [
     "GSE176078"
 ]  # Tumor subsets to iterate through
@@ -17,11 +20,9 @@ gtex_path = joinpath(data_path, "GTEx", gtex_dataset)
 zhang_base_path = joinpath(data_path, "Zhang_CancerCell_2025_sub")
 
 function add_tissue_type_row(df::DataFrame, tissue_type::String)
-    # 先将所有数值列转换为 Any 类型以支持混合类型
     for col_name in names(df)[2:end]
         col_type = eltype(df[!, col_name])
         if col_type <: Number
-            # 转换为 Any 类型
             df[!, col_name] = Vector{Any}(df[!, col_name])
         end
     end
@@ -41,7 +42,6 @@ function add_tissue_type_row(df::DataFrame, tissue_type::String)
 end
 
 function subset_common_genes(df::DataFrame, gene_set::Set{String})
-    # 注意：df 的第一行可能是 TissueType_D，需要排除
     first_row_is_metadata = string(df[1, 1]) == "TissueType_D"
     
     if first_row_is_metadata
@@ -53,7 +53,6 @@ function subset_common_genes(df::DataFrame, gene_set::Set{String})
         
         gene_rows = df[2:end, :]
         
-        # 更严格的过滤：只保留在 gene_set 中的基因，并且去重
         filtered_df = gene_rows[in.(String.(gene_rows.Gene_Symbol), Ref(gene_set)), :]
         
         # 确保没有重复基因
@@ -99,8 +98,6 @@ println("\n=== Loading GTEx Normal Data ===")
 gtex_raw_TPM = CSV.read(joinpath(gtex_path, "expression.csv"), DataFrame)
 gtex_metadata = CSV.read(joinpath(gtex_path, "metadata.csv"), DataFrame)
 
-# 临时添加 TissueType_D 行，标记为 "GTEx" (Normal)
-# 此函数会自动将数值列转换为 Any 类型以支持混合内容
 gtex_raw_TPM = add_tissue_type_row(gtex_raw_TPM, "GTEx")
 
 println("GTEx samples: ", size(gtex_raw_TPM, 2) - 1)
@@ -108,12 +105,6 @@ println("GTEx genes: ", size(gtex_raw_TPM, 1) - 1, " (+ 1 TissueType_D row)")
 println("GTEx TissueType_D: GTEx (Normal)")
 sample_ids_with_collection_times = String[]
 sample_collection_times = Float64[]
-
-if "Time_Hours" in names(gtex_metadata)
-    sample_ids_with_collection_times = String.(gtex_metadata[!, :Sample])
-    sample_collection_times = Float64.(gtex_metadata[!, :Time_Hours])
-    println("\nFound collection times for ", length(sample_collection_times), " GTEx samples")
-end
 
 training_parameters = Dict(
     :regex_cont => r"^$",
@@ -162,6 +153,7 @@ training_parameters = Dict(
     :train_min_steps => 1500,
     :train_max_steps => 2050,
     :train_μA_scale_lim => 1000,
+    :train_collection_times => false,
     
     :cosine_shift_iterations => 192,
     :cosine_covariate_offset => true,
@@ -206,7 +198,7 @@ println("Added ", n_workers, " workers")
 @everywhere begin
     using DataFrames, Statistics, StatsBase, LinearAlgebra, MultivariateStats
     using PyPlot, Random, CSV, Revise, Distributions, Dates, MultipleTesting
-    include(joinpath($cyclops_path, "CYCLOPS.jl"))
+    include($local_cyclops_file)
 end
 println("\n" * "="^80)
 println("=== Transfer Learning: GTEx → GTEx+Zhang ===")
@@ -335,13 +327,7 @@ for zhang_dataset in zhang_datasets
     println("  dataFile2 (GTEx+Zhang combined): $(size(gtex_zhang_combined))")
     println("  Seed genes: $(length(seed_genes))")
     
-    if length(sample_ids_with_collection_times) > 0
-        training_parameters[:train_sample_id] = sample_ids_with_collection_times
-        training_parameters[:train_sample_phase] = sample_collection_times
-        println("  Using collection times for $(length(sample_collection_times)) GTEx samples")
-    else
-        println("  WARNING: No collection time data - model may not learn circadian patterns!")
-    end
+    println("  Running in unsupervised mode (no collection times)")
     
     function fix_covariate_types!(df::DataFrame)
         if string(df[1, 1]) == "TissueType_D"

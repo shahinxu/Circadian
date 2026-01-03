@@ -1615,7 +1615,11 @@ function BluntXthPercentile(dataFile::T, options; OUT_TYPE = DataFrame) where T 
 		data[ii, above_max_logical] .= row_max[ii]
 	end
 	if OUT_TYPE == DataFrame
-		bluntedDataFile = DataFrame(hcat(Array(dataFile[:, 1]), vcat(Array(dataFile[1:options[:o_fxr]-1, 2:end]), data)), names(dataFile))
+		# Rebuild DataFrame: keep the first column (gene / covariate names)
+		# and vertically concatenate only numeric expression columns (2:end)
+		# for metadata rows and blunted expression data, so column counts match.
+		blunted_numeric = vcat(Array(dataFile[1:options[:o_fxr]-1, 2:end]), data)
+		bluntedDataFile = DataFrame(hcat(Array(dataFile[:, 1]), blunted_numeric), names(dataFile))
 		return bluntedDataFile
 	end
 	output_data = Array{OUT_TYPE, 2}(data)

@@ -6,7 +6,28 @@ output_path = "OUTPUT_PATH_PLACEHOLDER"
 path_to_cyclops = "./CYCLOPS.jl"
 
 expression_data = CSV.read(joinpath(data_path, "expression.csv"), DataFrame)
-seed_genes = readlines(joinpath(data_path, "seed_genes.txt"))
+# seed_genes = readlines(joinpath(data_path, "seed_genes.txt"))
+# seed_genes = String.(expression_data[!, 1])
+seed_genes = [
+    "Arntl", "ARNTL",
+    "Clock", "CLOCK",
+    "Npas2", "NPAS2",
+    "Nr1d1", "NR1D1",
+    "Bhlhe41", "BHLHE41",
+    "Nr1d2", "NR1D2",
+    "Dbp", "DBP",
+    "Ciart", "CIART",
+    "Per1", "PER1",
+    "Per3", "PER3",
+    "Tef", "TEF",
+    "Hlf", "HLF",
+    "Cry2", "CRY2",
+    "Per2", "PER2",
+    "Cry1", "CRY1",
+    "Rorc", "RORC",
+    "Nfil3", "NFIL3",
+]
+
 
 sample_ids_with_collection_times = []
 sample_collection_times = []
@@ -20,8 +41,8 @@ training_parameters = Dict(
     :regex_cont => r".*_C",
     :regex_disc => r".*_D",
     :blunt_percent => 0.975,
-    :seed_min_CV => 0.14,
-    :seed_max_CV => 0.9,
+    :seed_min_CV => -Inf,
+    :seed_max_CV => Inf,
     :seed_mth_Gene => 10000,
     :norm_gene_level => true,
     :norm_disc => false,

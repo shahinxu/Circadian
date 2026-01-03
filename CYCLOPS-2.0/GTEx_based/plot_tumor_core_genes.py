@@ -52,17 +52,33 @@ def load_expression_data(result_dir, dataset_name):
     
     base_path = cyclops_dir.parent / "data"
     
-    # Remove timestamp suffix from dataset name if present
-    dataset_clean = dataset_name.split('_2025')[0] if '_2025' in dataset_name else dataset_name
-    
-    # Determine data source path
-    if dataset_clean.startswith("GSE"):
-        expr_file = base_path / dataset_clean / "expression.csv"
-    else:
-        expr_file = base_path / "Zhang_CancerCell_2025_sub" / dataset_clean / "expression.csv"
-    
-    if not expr_file.exists():
-        raise FileNotFoundError(f"Expression file not found: {expr_file}")
+    # For Zhang transfer runs where the result directory is
+    # GTEx_Zhang_Transfer_{dataset}_{timestamp}, dataset_name is usually
+    # just the tumor subset name (e.g. "Bcell"). These live under
+    # data/Zhang_CancerCell_2025_sub/{dataset}/expression.csv.
+
+    # First try Zhang_CancerCell_2025_sub/{dataset_name}
+    expr_candidates = []
+    expr_candidates.append(base_path / "Zhang_CancerCell_2025_sub" / dataset_name / "expression.csv")
+
+    # If the name looks like it has a timestamp suffix, also try stripping
+    # everything after the last underscore.
+    if '_' in dataset_name:
+        base_name = dataset_name.split('_')[0]
+        expr_candidates.append(base_path / "Zhang_CancerCell_2025_sub" / base_name / "expression.csv")
+
+    # As a fallback, support GSE-style datasets directly under data/
+    if dataset_name.startswith("GSE"):
+        expr_candidates.append(base_path / dataset_name / "expression.csv")
+
+    expr_file = None
+    for candidate in expr_candidates:
+        if candidate.exists():
+            expr_file = candidate
+            break
+
+    if expr_file is None:
+        raise FileNotFoundError(f"Expression file not found. Tried: " + ", ".join(str(p) for p in expr_candidates))
     
     print(f"\nLoading expression data: {expr_file}")
     expr_df = pd.read_csv(expr_file)
