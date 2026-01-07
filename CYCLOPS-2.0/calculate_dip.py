@@ -68,7 +68,7 @@ def calculate_dip_with_outlier_removal(donor_data, outlier_threshold=np.pi/2):
 def load_and_process_data(result_dir):
     result_path = Path(result_dir)
     
-    phase_file = list(result_path.glob("Fit_Output_*.csv"))[0]
+    phase_file = list(result_path.glob("Fit_Output*.csv"))[0]
     df = pd.read_csv(phase_file)
     df = df.rename(columns={'ID': 'Sample'})
     if 'Phases_MA' in df.columns:
@@ -79,16 +79,27 @@ def load_and_process_data(result_dir):
         print("Warning: Phases_MA not found, using Phase instead")
     
     df = df[df['Phase'].notna()].copy()
+    
+    # Try Zhang format first: P\d+_(Pre|Post)\.CellType
     df['Donor'] = df['Sample'].str.extract(r'^(P\d+)_')[0]
     df['Treatment'] = df['Sample'].str.extract(r'_(Pre|Post)\.')[0]
     df['CellType'] = df['Sample'].str.extract(r'\.(.*?)$')[0]
     
-    df = df.dropna(subset=['Donor', 'Treatment', 'CellType'])
+    # If Zhang format didn't work, try GSE176078 format: CID\d+.CellType
+    if df['Donor'].isna().all():
+        print("Using GSE176078 format (CID\d+.CellType)")
+        df['Donor'] = df['Sample'].str.extract(r'^(CID\d+)\.')[0]
+        df['Treatment'] = 'All'  # No treatment groups in GSE176078
+        df['CellType'] = df['Sample'].str.extract(r'\.(.*?)$')[0]
+    
+    df = df.dropna(subset=['Donor', 'CellType'])
     
     return df
 
 def calculate_all_dips(df, remove_outliers=True, outlier_threshold=np.pi/2):
     results = []
+    
+    has_treatment = df['Treatment'].nunique() > 1
     
     for donor in sorted(df['Donor'].unique()):
         donor_data = df[df['Donor'] == donor].copy()
@@ -118,30 +129,32 @@ def calculate_all_dips(df, remove_outliers=True, outlier_threshold=np.pi/2):
             'Excluded_celltypes': ','.join(excluded) if excluded else ''
         })
         
-        for treatment in sorted(donor_data['Treatment'].unique()):
-            treat_data = donor_data[donor_data['Treatment'] == treatment]
-            
-            if remove_outliers:
-                dip_treat, incl, excl = calculate_dip_with_outlier_removal(
-                    treat_data, outlier_threshold
-                )
-            else:
-                dip_treat = circular_mean(treat_data['Phase'].values)
-                incl = treat_data['CellType'].tolist()
-                excl = []
-            
-            dip_treat_std = circular_std(treat_data['Phase'].values)
-            
-            results.append({
-                'Donor': f"{donor}_{treatment}",
-                'DIP': dip_treat,
-                'DIP_std': dip_treat_std,
-                'N_samples': len(treat_data),
-                'N_included': len(incl),
-                'N_excluded': len(excl),
-                'Included_celltypes': ','.join(incl) if incl else '',
-                'Excluded_celltypes': ','.join(excl) if excl else ''
-            })
+        # Only process treatment groups if they exist
+        if has_treatment:
+            for treatment in sorted(donor_data['Treatment'].unique()):
+                treat_data = donor_data[donor_data['Treatment'] == treatment]
+                
+                if remove_outliers:
+                    dip_treat, incl, excl = calculate_dip_with_outlier_removal(
+                        treat_data, outlier_threshold
+                    )
+                else:
+                    dip_treat = circular_mean(treat_data['Phase'].values)
+                    incl = treat_data['CellType'].tolist()
+                    excl = []
+                
+                dip_treat_std = circular_std(treat_data['Phase'].values)
+                
+                results.append({
+                    'Donor': f"{donor}_{treatment}",
+                    'DIP': dip_treat,
+                    'DIP_std': dip_treat_std,
+                    'N_samples': len(treat_data),
+                    'N_included': len(incl),
+                    'N_excluded': len(excl),
+                    'Included_celltypes': ','.join(incl) if incl else '',
+                    'Excluded_celltypes': ','.join(excl) if excl else ''
+                })
     
     return pd.DataFrame(results)
 
@@ -261,10 +274,5 @@ if __name__ == "__main__":
         for _, row in donor_only.iterrows():
             if row['Excluded_celltypes']:
                 print(f"{row['Donor']}: {row['Excluded_celltypes']}")
-    
-    print("\n" + "="*60)
-    print("Generating plots...")
-    print("="*60)
-    plot_dip_results(df, dip_df, result_dir)
     
     print("\nDone!")

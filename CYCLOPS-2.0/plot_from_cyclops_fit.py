@@ -14,30 +14,32 @@ DEFAULT_GENES = [
 
 
 def find_fit_file(base: Path) -> Path:
-    """Given a CYCLOPS results directory, pick a Fit_Output_*.csv file.
+    """Given a CYCLOPS results directory, pick a Fit_Output*.csv file.
 
-    If base itself is a Fit_Output_*.csv, just return it.
-    Otherwise, search under base for files starting with "Fit_Output_" and
+    If base itself is a Fit_Output*.csv, just return it.
+    Otherwise, search under base for files starting with "Fit_Output" and
     choose the lexicographically latest one (usually the most recent).
+    Supports both Fit_Output.csv and Fit_Output_*.csv formats.
     """
 
     base = base.resolve()
-    if base.is_file() and base.name.startswith("Fit_Output_") and base.suffix == ".csv":
+    if base.is_file() and base.name.startswith("Fit_Output") and base.suffix == ".csv":
         return base
 
     if not base.is_dir():
         raise FileNotFoundError(f"Results path not found or not a directory: {base}")
 
+    # Try both Fit_Output_*.csv and Fit_Output.csv
     candidates = sorted(
-        p for p in base.glob("Fit_Output_*.csv") if p.is_file()
+        p for p in base.glob("Fit_Output*.csv") if p.is_file()
     )
     if not candidates:
         # Allow searching one level down in case user points to higher directory
         candidates = sorted(
-            p for p in base.rglob("Fit_Output_*.csv") if p.is_file()
+            p for p in base.rglob("Fit_Output*.csv") if p.is_file()
         )
     if not candidates:
-        raise FileNotFoundError(f"No Fit_Output_*.csv found under: {base}")
+        raise FileNotFoundError(f"No Fit_Output*.csv found under: {base}")
     return candidates[-1]
 
 
@@ -98,6 +100,30 @@ def map_fit_to_expression(fit_path: Path) -> Path:
     )
 
 
+def get_celltype_mapping(expr_file: Path, sample_ids):
+    """Extract celltype information from Celltype_D row if it exists.
+    
+    Returns:
+        dict mapping sample_id -> celltype, or None if Celltype_D row doesn't exist
+    """
+    df = pd.read_csv(expr_file, low_memory=False)
+    if "Gene_Symbol" not in df.columns:
+        return None
+    
+    # Check for Celltype_D (case-insensitive)
+    celltype_rows = df[df["Gene_Symbol"].str.upper() == "CELLTYPE_D"]
+    if celltype_rows.empty:
+        return None
+    
+    celltype_row = celltype_rows.iloc[0]
+    celltype_map = {}
+    for sid in sample_ids:
+        if sid in celltype_row.index:
+            celltype_map[sid] = celltype_row[sid]
+    
+    return celltype_map if celltype_map else None
+
+
 def load_expression_for_genes(expr_file: Path, genes_upper, sample_ids):
     """Load expression values for given genes and samples.
 
@@ -112,6 +138,9 @@ def load_expression_for_genes(expr_file: Path, genes_upper, sample_ids):
         raise ValueError(f"expression.csv missing 'Gene_Symbol' column: {expr_file}")
 
     df["GENE_UP"] = df["Gene_Symbol"].astype(str).str.upper()
+    
+    # Exclude Celltype_D row from gene expression data (case-insensitive)
+    df = df[df["GENE_UP"] != "CELLTYPE_D"]
 
     # Use sample IDs that exist in the expression file
     sample_cols = [sid for sid in sample_ids if sid in df.columns]
@@ -273,22 +302,58 @@ def main():
         expr_file = map_fit_to_expression(fit_file)
     print(f"Using expression: {expr_file}")
 
-    # Load Fit_Output and get phases and sample IDs
     fit_df = pd.read_csv(fit_file)
-    # CYCLOPS Fit_Output uses ID column for sample ID and Phase column in radians
     if "ID" not in fit_df.columns:
         raise ValueError("Fit_Output file must contain an 'ID' column.")
-    if "Phase" not in fit_df.columns:
-        raise ValueError("Fit_Output file must contain a 'Phase' column.")
+    
+    # Prefer Phase_MA (moving average) if available, otherwise use Phase
+    if "Phase_MA" in fit_df.columns:
+        phase_col = "Phase_MA"
+        print("Using Phase_MA (moving average phase)")
+    elif "Phase" in fit_df.columns:
+        phase_col = "Phase"
+        print("Using Phase column")
+    else:
+        raise ValueError("Fit_Output file must contain a 'Phase' or 'Phase_MA' column.")
 
     sample_ids = fit_df["ID"].astype(str).tolist()
-    phases_rad = pd.to_numeric(fit_df["Phase"], errors="coerce").values
+    phases_rad = pd.to_numeric(fit_df[phase_col], errors="coerce").values
     phases_hours = (phases_rad % (2 * np.pi)) * (24.0 / (2 * np.pi))
 
-    expr_by_gene = load_expression_for_genes(expr_file, genes_upper, sample_ids)
-
-    out_png = fit_file.with_name("expression_vs_phase_cyclops.png")
-    plot_expression_vs_phase(expr_by_gene, phases_hours, genes_upper, out_png)
+    # Check if Celltype_D exists and group by celltype
+    celltype_map = get_celltype_mapping(expr_file, sample_ids)
+    
+    if celltype_map:
+        # Group samples by celltype
+        celltype_groups = {}
+        for sid, ctype in celltype_map.items():
+            if ctype not in celltype_groups:
+                celltype_groups[ctype] = []
+            celltype_groups[ctype].append(sid)
+        
+        print(f"Found {len(celltype_groups)} cell types: {list(celltype_groups.keys())}")
+        
+        # Plot for each celltype
+        for ctype, ctype_samples in celltype_groups.items():
+            # Get indices of these samples in the original sample_ids list
+            indices = [i for i, sid in enumerate(sample_ids) if sid in ctype_samples]
+            if not indices:
+                continue
+            
+            # Filter expression and phases for this celltype
+            expr_by_gene = load_expression_for_genes(expr_file, genes_upper, sample_ids)
+            expr_filtered = expr_by_gene.iloc[indices]
+            phases_filtered = phases_hours[indices]
+            
+            out_png = fit_file.with_name(f"expression_vs_phase_cyclops_{ctype}.png")
+            print(f"Plotting {ctype} with {len(indices)} samples...")
+            plot_expression_vs_phase(expr_filtered, phases_filtered, genes_upper, out_png)
+    else:
+        # No Celltype_D found, plot all samples together
+        print("No Celltype_D found, plotting all samples together")
+        expr_by_gene = load_expression_for_genes(expr_file, genes_upper, sample_ids)
+        out_png = fit_file.with_name("expression_vs_phase_cyclops.png")
+        plot_expression_vs_phase(expr_by_gene, phases_hours, genes_upper, out_png)
 
 
 if __name__ == "__main__":
