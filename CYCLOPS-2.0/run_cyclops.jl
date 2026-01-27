@@ -6,8 +6,8 @@ output_path = "OUTPUT_PATH_PLACEHOLDER"
 path_to_cyclops = "./CYCLOPS.jl"
 
 expression_data = CSV.read(joinpath(data_path, "expression.csv"), DataFrame)
-seed_genes = readlines(joinpath(data_path, "seed_genes.txt"))
-# seed_genes = String.(expression_data[!, 1])
+# seed_genes = readlines(joinpath(data_path, "seed_genes.txt"))
+seed_genes = String.(expression_data[!, 1])
 # seed_genes = [
 #     "Arntl", "ARNTL",
 #     "Clock", "CLOCK",

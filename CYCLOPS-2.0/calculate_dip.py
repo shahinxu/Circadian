@@ -85,12 +85,13 @@ def load_and_process_data(result_dir):
     df['Treatment'] = df['Sample'].str.extract(r'_(Pre|Post)\.')[0]
     df['CellType'] = df['Sample'].str.extract(r'\.(.*?)$')[0]
     
-    # If Zhang format didn't work, try GSE176078 format: CID\d+.CellType
-    if df['Donor'].isna().all():
-        print("Using GSE176078 format (CID\d+.CellType)")
-        df['Donor'] = df['Sample'].str.extract(r'^(CID\d+)\.')[0]
-        df['Treatment'] = 'All'  # No treatment groups in GSE176078
-        df['CellType'] = df['Sample'].str.extract(r'\.(.*?)$')[0]
+    # For samples that didn't match Zhang format, try GSE176078 format: CID\d+.CellType
+    cid_mask = df['Donor'].isna()
+    if cid_mask.any():
+        print(f"Found {cid_mask.sum()} samples in GSE176078 format (CID\\d+.CellType)")
+        df.loc[cid_mask, 'Donor'] = df.loc[cid_mask, 'Sample'].str.extract(r'^(CID\d+)\.')[0]
+        df.loc[cid_mask, 'Treatment'] = 'All'  # No treatment groups in GSE176078
+        # CellType already extracted above
     
     df = df.dropna(subset=['Donor', 'CellType'])
     

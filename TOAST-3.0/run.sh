@@ -3,7 +3,7 @@
 
 # Single dataset example
 python train.py \
-    --dataset_path "AD427" \
+    --dataset_path "GSE145197" \
     --num_epochs 1000 \
     --lr 0.001 \
     --device cuda \
